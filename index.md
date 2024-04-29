@@ -19,6 +19,7 @@ This project was challenging due to the large data set and imbalanced target var
 <br><br>
 ---
 <br>
+
 #### House Prices: Advanced Regression Techniques
 
 Predict housing prices in Ames, Iowa with a supervised model. I developed a linear regression model of housing prices with the limitation of using only 5 predictors entered additively, with a goal of estimated 0.75 estimate out-of-sample R-squared value.
