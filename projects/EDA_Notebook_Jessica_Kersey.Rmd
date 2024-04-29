@@ -1,0 +1,1203 @@
+---
+title: "EDA Notebook for Home Credit Default Risk Project"
+author: "Jessica Kersey"
+date: "2024-03-23"
+output:
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+# Introduction
+
+**Kaggle Competition:** Home Credit Default Risk
+
+**Competition Link:** <https://www.kaggle.com/competitions/home-credit-default-risk>
+
+**Business Problem Summary:** Home Credit wants to serve customers who are unbanked or lack credit history, so they need to identify if an applicant is capable of repayment or likely to have payment difficulties.
+
+**Analytics Problem Summary:** Create a supervised model to predict whether or not the client is likely to have difficulties repaying the loan based on the application and other data. The target variable is binary where 1 indicates "payment difficulties", characterized by the client meeting a certain threshold of late payments in the first threshold number of installments. A classification model such as a classification tree or logistic regression will be used.
+
+This notebook will include exploratory data analysis to prepare for modeling.
+
+**Questions:**  
+
+* Is the data unbalanced with respect to the target?  
+* What would the accuracy be with simple majority class classifier?
+* Should any numeric or character fields be factored?  (assuming model doesn't automatically factor)
+* What columns have NAs?  
+* Can the NAs be explained by the data dictionary or other columns?  
+* Do any columns have a significant proportion of NAs so should be excluded? 
+* Can any NAs be imputed?  
+* Are there any mistaken values?  
+* Are there any outlier values that may skew a predictor?
+* Does log transformation help the predictors with outliers correlate better with target?
+* What may be strong predictors of the target variable?
+* How can additional data files be summarized to provide additional predictors?
+
+# Get Data
+
+Load library packages
+
+```{r}
+#load library packages
+library(tidyverse) #for advanced stats including dplyr and ggplot
+library(skimr) #for advanced stats
+library(gt) #for table formatting
+library(knitr) #for table formatting
+library(rpart) #for classification tree model
+library(rpart.plot) #for plotting classification tree model
+```
+
+Load data
+
+```{r}
+# load train data
+train <- read.csv("application_train.csv")
+
+# load test data
+test <- read.csv("application_test.csv")
+
+# bureau
+bureau <- read.csv("bureau.csv")
+
+# bureau_balance
+bureau_balance <- read.csv("bureau_balance.csv")
+```
+
+# Review Data
+
+Review train data set.
+
+```{r, results = 'hide'}
+#view train data. Note:lengthy output suppressed
+skim_train <- skim(train)
+skim_train
+
+#view test data. Note:lengthy output suppressed
+skim_test <- skim(test)
+skim_test
+```
+
+The target variable `TARGET` appears to be unbalanced with a mean near zero. Calculate accuracy of majority class model:
+
+```{r}
+# calculate accuracy of majority class prediction
+sum(train$TARGET == "0") / nrow(train)
+```
+
+A simple model using a majority class classifier would be accurate 92% of the time. This means the classes are strongly imbalanced, with only about 8% of the records in the train set providing description on the population that had difficulties repaying their loans.
+
+# Clean Data
+
+## Factor
+
+Fields identified as "flag" fields (Yes/No responses) are good candidates for factorization, such as FLAG_OWN_CAR. Ratings where numbers are categories should also be factored, such as REGION_RATING_CLIENT.
+
+View the first handful of rows to see which other character fields have standard inputs which can be factored.
+
+```{r, results = 'hide'}
+# view first handful of rows in train data set. Note:lengthy output suppressed
+head(train,20)
+```
+
+Depending on the model used, character data types may be factored automatically. This list includes characters in case the chosen model does not, as well as num and int values. The following fields should be factored:
+
+* TARGET  
+* NAME_CONTRACT_TYPE  
+* CODE_GENDER  
+* FLAG_OWN_CAR  
+* FLAG_OWN_REALTY  
+* NAME_TYPE_SUITE  
+* NAME_INCOME_TYPE  
+* NAME_EDUCATION_TYPE  
+* NAME_FAMILY_STATUS  
+* NAME_HOUSING_TYPE  
+* FLAG_MOBIL  
+* FLAG_EMP_PHONE  
+* FLAG_WORK_PHONE  
+* FLAG_CONT_MOBILE  
+* FLAG_PHONE  
+* FLAG_EMAIL  
+* OCCUPATION_TYPE  
+* REGION_RATING_CLIENT  
+* REGION_RATING_CLIENT_W_CITY  
+* WEEKDAY_APPR_PROCESS_START  
+* REG_REGION_NOT_LIVE_REGION  
+* REG_REGION_NOT_WORK_REGION  
+* LIVE_REGION_NOT_WORK_REGION  
+* REG_CITY_NOT_LIVE_CITY  
+* REG_CITY_NOT_WORK_CITY  
+* LIVE_CITY_NOT_WORK_CITY  
+* ORGANIZATION_TYPE  
+* FONDKAPREMONT_MODE  
+* HOUSETYPE_MODE  
+* WALLSMATERIAL_MODE  
+* EMERGENCYSTATE_MODE  
+* FLAG_DOCUMENT\_[...] (2 through 21)
+
+Set factored version of train and test set for use later.
+
+<details><summary>**Click here to view factoring code.**</summary>
+
+```{r, results = 'hide'}
+#view train data. Note:lengthy output suppressed
+train_factored <- train %>%
+  mutate(TARGET = factor(TARGET),
+         NAME_CONTRACT_TYPE = factor(NAME_CONTRACT_TYPE),
+         CODE_GENDER = factor(CODE_GENDER),
+         FLAG_OWN_CAR = factor(FLAG_OWN_CAR),
+         FLAG_OWN_REALTY = factor(FLAG_OWN_REALTY),
+         NAME_TYPE_SUITE = factor(NAME_TYPE_SUITE),
+         NAME_INCOME_TYPE = factor(NAME_INCOME_TYPE),
+         NAME_EDUCATION_TYPE = factor(NAME_EDUCATION_TYPE),
+         NAME_FAMILY_STATUS = factor(NAME_FAMILY_STATUS),
+         NAME_HOUSING_TYPE = factor(NAME_HOUSING_TYPE),
+         FLAG_MOBIL = factor(FLAG_MOBIL), 
+         FLAG_EMP_PHONE = factor(FLAG_EMP_PHONE),
+         FLAG_WORK_PHONE = factor(FLAG_WORK_PHONE),
+         FLAG_CONT_MOBILE = factor(FLAG_CONT_MOBILE),
+         FLAG_PHONE = factor(FLAG_PHONE),
+         FLAG_EMAIL = factor(FLAG_EMAIL),
+         OCCUPATION_TYPE = factor(OCCUPATION_TYPE),
+         REGION_RATING_CLIENT = factor(REGION_RATING_CLIENT),
+         REGION_RATING_CLIENT_W_CITY = factor(REGION_RATING_CLIENT_W_CITY),
+         WEEKDAY_APPR_PROCESS_START = factor(WEEKDAY_APPR_PROCESS_START),
+         REG_REGION_NOT_LIVE_REGION = factor(REG_REGION_NOT_LIVE_REGION),
+         REG_REGION_NOT_WORK_REGION = factor(REG_REGION_NOT_WORK_REGION),
+         LIVE_REGION_NOT_WORK_REGION = factor(LIVE_REGION_NOT_WORK_REGION),
+         REG_CITY_NOT_LIVE_CITY = factor(REG_CITY_NOT_LIVE_CITY),
+         REG_CITY_NOT_WORK_CITY = factor(REG_CITY_NOT_WORK_CITY),
+         LIVE_CITY_NOT_WORK_CITY = factor(LIVE_CITY_NOT_WORK_CITY),
+         ORGANIZATION_TYPE = factor(ORGANIZATION_TYPE),
+         FONDKAPREMONT_MODE = factor(FONDKAPREMONT_MODE),
+         HOUSETYPE_MODE = factor(HOUSETYPE_MODE),
+         WALLSMATERIAL_MODE = factor(WALLSMATERIAL_MODE),
+         EMERGENCYSTATE_MODE = factor(EMERGENCYSTATE_MODE),
+         FLAG_DOCUMENT_2 = factor(FLAG_DOCUMENT_2),
+         FLAG_DOCUMENT_3 = factor(FLAG_DOCUMENT_3),
+         FLAG_DOCUMENT_4 = factor(FLAG_DOCUMENT_4),
+         FLAG_DOCUMENT_5 = factor(FLAG_DOCUMENT_5),
+         FLAG_DOCUMENT_6 = factor(FLAG_DOCUMENT_6),
+         FLAG_DOCUMENT_7 = factor(FLAG_DOCUMENT_7),
+         FLAG_DOCUMENT_8 = factor(FLAG_DOCUMENT_8),
+         FLAG_DOCUMENT_9 = factor(FLAG_DOCUMENT_9),
+         FLAG_DOCUMENT_10 = factor(FLAG_DOCUMENT_10),
+         FLAG_DOCUMENT_11 = factor(FLAG_DOCUMENT_11),
+         FLAG_DOCUMENT_12 = factor(FLAG_DOCUMENT_12),
+         FLAG_DOCUMENT_13 = factor(FLAG_DOCUMENT_13),
+         FLAG_DOCUMENT_14 = factor(FLAG_DOCUMENT_14),
+         FLAG_DOCUMENT_15 = factor(FLAG_DOCUMENT_15),
+         FLAG_DOCUMENT_16 = factor(FLAG_DOCUMENT_16),
+         FLAG_DOCUMENT_17 = factor(FLAG_DOCUMENT_17),
+         FLAG_DOCUMENT_18 = factor(FLAG_DOCUMENT_18),
+         FLAG_DOCUMENT_19 = factor(FLAG_DOCUMENT_19),
+         FLAG_DOCUMENT_20 = factor(FLAG_DOCUMENT_20),
+         FLAG_DOCUMENT_21 = factor(FLAG_DOCUMENT_21)
+  )
+
+#view test data. Note:lengthy output suppressed
+test_factored <- test %>%
+  mutate(NAME_CONTRACT_TYPE = factor(NAME_CONTRACT_TYPE),
+         CODE_GENDER = factor(CODE_GENDER),
+         FLAG_OWN_CAR = factor(FLAG_OWN_CAR),
+         FLAG_OWN_REALTY = factor(FLAG_OWN_REALTY),
+         NAME_TYPE_SUITE = factor(NAME_TYPE_SUITE),
+         NAME_INCOME_TYPE = factor(NAME_INCOME_TYPE),
+         NAME_EDUCATION_TYPE = factor(NAME_EDUCATION_TYPE),
+         NAME_FAMILY_STATUS = factor(NAME_FAMILY_STATUS),
+         NAME_HOUSING_TYPE = factor(NAME_HOUSING_TYPE),
+         FLAG_MOBIL = factor(FLAG_MOBIL), 
+         FLAG_EMP_PHONE = factor(FLAG_EMP_PHONE),
+         FLAG_WORK_PHONE = factor(FLAG_WORK_PHONE),
+         FLAG_CONT_MOBILE = factor(FLAG_CONT_MOBILE),
+         FLAG_PHONE = factor(FLAG_PHONE),
+         FLAG_EMAIL = factor(FLAG_EMAIL),
+         OCCUPATION_TYPE = factor(OCCUPATION_TYPE),
+         REGION_RATING_CLIENT = factor(REGION_RATING_CLIENT),
+         REGION_RATING_CLIENT_W_CITY = factor(REGION_RATING_CLIENT_W_CITY),
+         WEEKDAY_APPR_PROCESS_START = factor(WEEKDAY_APPR_PROCESS_START),
+         REG_REGION_NOT_LIVE_REGION = factor(REG_REGION_NOT_LIVE_REGION),
+         REG_REGION_NOT_WORK_REGION = factor(REG_REGION_NOT_WORK_REGION),
+         LIVE_REGION_NOT_WORK_REGION = factor(LIVE_REGION_NOT_WORK_REGION),
+         REG_CITY_NOT_LIVE_CITY = factor(REG_CITY_NOT_LIVE_CITY),
+         REG_CITY_NOT_WORK_CITY = factor(REG_CITY_NOT_WORK_CITY),
+         LIVE_CITY_NOT_WORK_CITY = factor(LIVE_CITY_NOT_WORK_CITY),
+         ORGANIZATION_TYPE = factor(ORGANIZATION_TYPE),
+         FONDKAPREMONT_MODE = factor(FONDKAPREMONT_MODE),
+         HOUSETYPE_MODE = factor(HOUSETYPE_MODE),
+         WALLSMATERIAL_MODE = factor(WALLSMATERIAL_MODE),
+         EMERGENCYSTATE_MODE = factor(EMERGENCYSTATE_MODE),
+         FLAG_DOCUMENT_2 = factor(FLAG_DOCUMENT_2),
+         FLAG_DOCUMENT_3 = factor(FLAG_DOCUMENT_3),
+         FLAG_DOCUMENT_4 = factor(FLAG_DOCUMENT_4),
+         FLAG_DOCUMENT_5 = factor(FLAG_DOCUMENT_5),
+         FLAG_DOCUMENT_6 = factor(FLAG_DOCUMENT_6),
+         FLAG_DOCUMENT_7 = factor(FLAG_DOCUMENT_7),
+         FLAG_DOCUMENT_8 = factor(FLAG_DOCUMENT_8),
+         FLAG_DOCUMENT_9 = factor(FLAG_DOCUMENT_9),
+         FLAG_DOCUMENT_10 = factor(FLAG_DOCUMENT_10),
+         FLAG_DOCUMENT_11 = factor(FLAG_DOCUMENT_11),
+         FLAG_DOCUMENT_12 = factor(FLAG_DOCUMENT_12),
+         FLAG_DOCUMENT_13 = factor(FLAG_DOCUMENT_13),
+         FLAG_DOCUMENT_14 = factor(FLAG_DOCUMENT_14),
+         FLAG_DOCUMENT_15 = factor(FLAG_DOCUMENT_15),
+         FLAG_DOCUMENT_16 = factor(FLAG_DOCUMENT_16),
+         FLAG_DOCUMENT_17 = factor(FLAG_DOCUMENT_17),
+         FLAG_DOCUMENT_18 = factor(FLAG_DOCUMENT_18),
+         FLAG_DOCUMENT_19 = factor(FLAG_DOCUMENT_19),
+         FLAG_DOCUMENT_20 = factor(FLAG_DOCUMENT_20),
+         FLAG_DOCUMENT_21 = factor(FLAG_DOCUMENT_21)
+  )
+```
+
+</details>
+
+## N/As
+
+Look at the total NAs for each column in train data set.
+
+```{r, results = 'hide'}
+# note: lengthy outputs suppressed
+
+# filter train data set to only the columns with NAs 
+missing_train <- filter(skim_train[,2:3], n_missing>0)
+
+# add a row to calculate percent missing
+missing_train_table <- missing_train %>%
+  mutate(percent_missing = round(n_missing / nrow(train)*100,1))
+
+# show table 
+missing_train_table %>%
+  gt() %>%
+  tab_header(title = "Train Data Set Missing Values")
+  
+  
+# filter test data set to only the columns with NAs  
+missing_test <- filter(skim_test[,2:3], n_missing>0)
+
+# add a row to calculate percent missing
+missing_test_table <- missing_test %>%
+  mutate(percent_missing = round(n_missing / nrow(test)*100,1))
+
+# show table
+missing_test_table %>%
+  gt() %>%
+  tab_header(title = "Test Data Set Missing Values")
+```
+
+All the columns in test data set with NAs also have NAs in train data set and most have similar proportions of NAs across the sets, so let's focus investigation on the train data set.
+
+### Easy explanations
+
+`AMT_ANNUITY` and `CNT_FAM_MEMBERS` have very few NA values; we can assume NA was entered in lieu of none and replace them with 0.
+
+`AMT_GOODS_PRICE` could have NAs where the loan is not for specific goods. Check if they correspond with non-consumer loan types by filtering for NA rows only and grouping by contract type:
+
+```{r}
+# count rows with NAs for AMT_GOODS_PRICE by contract type
+filter(train,is.na(AMT_GOODS_PRICE)) %>%
+  group_by(NAME_CONTRACT_TYPE) %>%
+  summarise(count = n())
+```
+
+All NAs are for Revolving Loan type, so would not be for goods. Set NA = 0 since field is numeric.
+
+`OWN_CAR_AGE` has 66% of the rows as NA, but we expect those rows to likely correspond with car ownership.
+
+```{r}
+# count rows with no car
+sum(train$FLAG_OWN_CAR=="N")
+```
+
+There are almost the same number of rows with NAs for car age as rows with no car. That supports the guess that the vast majority of NAs are for clients with no car, so we can impute with 0 for car age.
+
+For the `SOCIAL_CIRCLE` fields, each has the same quantity of NAs. These may correspond with missing data (either inability to determine their social circle, or no data on their social circle), or they may be mistakenly entered instead of a zero. Since the dictionary specifies "how many observation", if there is no data (no observations), imputing with 0 seems accurate!
+
+Likewise, the `AMT_REQ_CREDIT_BUREAU` fields could be because there is no credit bureau file for the client. Since the dictionary states "number of inquiries", if no inquiries were found these can be imputed with 0.
+
+### Phone Change
+
+There is 1 NA in `DAYS_LAST_PHONE_CHANGE`, let's view that row.
+
+```{r, results='hide'}
+# view row with last phone change (note: lengthy result suppressed)
+filter(train,is.na(DAYS_LAST_PHONE_CHANGE))
+```
+
+The individual did not provide mobile, work, or home phone, so we can guess this NA is because they have no number to change. However, the `FLAG_CONT_MOBILE` indicates that this client's mobile phone was reachable, which is odd given there is no mobile phone provided! These appear to be the only discrepant columns, but there are many predictors with NA and this is on the larger side of the imbalanced target so we could remove this row.
+
+### External Sources
+
+In the dictionary, for `EXT_SOURCE_1`, `EXT_SOURCE_2`, and `EXT_SOURCE_3` the description is "Normalized score from external data source", so their NAs (56%, <1%, and 20%, respectively) likely indicate when the client did not have data in the external source system. Let's see if they correlate with the target and may have value in a model, starting with `EXT_SOURCE_1`:
+
+```{r}
+# plot EXT_SOURCE_1 vs target
+train %>% 
+  ggplot(aes(EXT_SOURCE_1,factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of EXT_SOURCE_1 by Target", y = "Target") +
+  theme_minimal()
+
+# create a missingness indicator for EXT_SOURCE_1
+train %>% 
+  mutate(es1_missing = ifelse(is.na(EXT_SOURCE_1), "Yes", "No" )) %>% 
+  group_by(TARGET, es1_missing) %>%
+  summarise(count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(proportion = count/sum(count)) %>%     # create proportion to make imbalanced target comparable
+  ggplot(aes(factor(TARGET), proportion, fill = factor(es1_missing))) +
+  geom_bar(stat = "identity", position="dodge") +
+  labs(title = "EXT_SOURCE_1 Missingness Indicator", x = "Target", y = "Proportion of EXT_SOURCE_1", fill = "Missing") +
+  theme_minimal()
+```
+
+Though Target variable of 1 (payment difficulties) looks lower, the medians of the variables in the boxplot overlap with the other variables' interquartile range, so the difference may not be significant. If converted to a missingness indicator instead, both Target variables have similar proportions of missing vs extant values. Since there over 50% of values missing, this column can be excluded.
+
+Next, look at `EXT_SOURCE_2`:
+
+```{r}
+# plot EXT_SOURCE_2 vs target
+train %>% 
+  ggplot(aes(EXT_SOURCE_2,factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of EXT_SOURCE_2 by Target", y = "Target") +
+  theme_minimal()
+
+# create a missingness indicator for EXT_SOURCE_2
+train %>% 
+  mutate(es2_missing = ifelse(is.na(EXT_SOURCE_2), "Yes", "No" )) %>% 
+  group_by(TARGET, es2_missing) %>%
+  summarise(count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(proportion = count/sum(count)) %>%      # create proportion to make imbalanced target comparable
+  ggplot(aes(factor(TARGET), proportion, fill = factor(es2_missing))) +
+  geom_bar(stat = "identity", position="dodge") +
+  labs(title = "EXT_SOURCE_2 Missingness Indicator", x = "Target", y = "Proportion of EXT_SOURCE_2", fill = "Missing") +
+  theme_minimal()
+```
+
+Like `EXT_SOURCE_1`, there is notable overlap of the interquartile ranges, so this variable may not strongly correlate with the target. However, there are very few missing values for this field, so I will impute with the mean.
+
+Finally, `EXT_SOURCE_3`:
+
+```{r}
+# plot EXT_SOURCE_3 vs target
+train %>% 
+  ggplot(aes(EXT_SOURCE_3,factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of EXT_SOURCE_3 by Target", y = "Target") +
+  theme_minimal()
+
+# create a missingness indicator for EXT_SOURCE_3
+train %>% 
+  mutate(es3_missing = ifelse(is.na(EXT_SOURCE_3), "Yes", "No" )) %>%  
+  group_by(TARGET, es3_missing) %>%
+  summarise(count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(proportion = count/sum(count)) %>%     # create proportion to make imbalanced target comparable
+  ggplot(aes(factor(TARGET), proportion, fill = factor(es3_missing))) +
+  geom_bar(stat = "identity", position="dodge") +
+  labs(title = "EXT_SOURCE_3 Missingness Indicator", x = "Target", y = "Proportion of EXT_SOURCE_3", fill = "Missing") +
+  theme_minimal()
+```
+
+Similar to the previous variables, the interquartile ranges overlap and turning into a missingness indicator would not be useful. With about 20% of rows missing, we can impute NAs with the mean and see if the variable is a useful predictor for the target during the modeling phase. If it doesn't add value to the model, it can be dropped.
+
+### Building Specs
+
+The building specification variables (mode and median of features such as floors, areas, entrances, and elevators) have about 45-70% missing for every variable across both train and test set. The missing values are likely due to the information not being available. Additionally, I suspect that these values may correlate more with the variable `NAME_HOUSING_TYPE` than the target directly, as some features apply mainly to different housing types; i.e., houses rarely have elevators, while apartments usually do.
+
+```{r}
+# create a table to look at the housing types
+train %>%
+  group_by(NAME_HOUSING_TYPE) %>%
+  summarise(count = n()) %>%
+  gt() %>%
+  tab_header(title = "Count of Housing Types")
+```
+
+With a category grouping houses with apartments in a single field, it may not be useful to examine these variables broken down by `NAME_HOUSING_TYPE`. I explored the option of a handful of these fields mutated into a missingness indicator (using the same function as above), but none had notable difference between the target variables. With such high missingness, I am inclined to exclude these potential predictors. In the "Explore Data Relationships" section below, I will see if any may correlate well with the target.
+
+
+## Outliers and Mistaken Data
+
+From looking at the original skim output, some fields had obvious mistaken data. Let's look at the factored data sets to narrow in on the actual numeric vs non-numeric fields then explore them more.
+
+```{r, results = 'hide'}
+# note: lengthy output suppressed
+# check factored train set
+skim(train_factored)
+
+# check factored test set
+skim(test_factored)
+```
+
+### Family Size
+
+`CNT_CHILDREN` could have outliers, with 19 as maximum.
+
+```{r, results='hide'}
+
+# create table of quantity rows for each # of children (note: lengthy output suppressed)
+train %>%
+  group_by(CNT_CHILDREN) %>%
+  summarise(count = n()) %>%
+  gt %>%
+  tab_header(title = "Count of Child Quantity")
+```
+
+These family sizes may be much larger than those in the USA, but Home Credit services a range of countries. Let's use 7 as a cutoff and compare rows with 7+ children with the family size `CNT_FAM_MEMBERS` to check they correspond. If not, one may be a typo.
+
+```{r, results = 'hide'}
+# view records with 6 or more children and compare to family members (note: lengthy output suppressed)
+filter(train[,c(1,7,30)],CNT_CHILDREN>6) %>%
+  mutate(non_child_fam_mem = CNT_FAM_MEMBERS - CNT_CHILDREN)
+```
+
+All families with 7 or more children have a count of family members that makes sense. Nothing out of the ordinary.
+
+### Income
+
+Let's look at the potential outlier maximum `AMT_INCOME_TOTAL`:
+
+```{r}
+# plot income vs target using boxplot
+train %>%
+  ggplot(aes(x = AMT_INCOME_TOTAL, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Income vs Target", y = "Target", x = "Total Income") +
+  theme_minimal()
+```
+
+Interestingly, that outlier value client seems to have had trouble paying back their loan. Maybe they requested a very expensive loan.  
+
+```{r}
+# plot income vs target using boxplot
+train %>%
+  ggplot(aes(x = AMT_INCOME_TOTAL, y = AMT_CREDIT)) +
+  geom_point() +
+  labs(title = "Income vs Loan Amount", y = "Loan Amount", x = "Total Income") +
+  theme_minimal()
+```
+
+It doesn't seem so. This could have been a typo where an extra zero was added, but we don't know for sure. This is in the target =1 set, so difficulties in payment with a large income may be a true but rare case. During modeling, we may choose to take log of AMT_INCOME_TOTAL to reduce the effect this outlier may have. Let's check:
+
+```{r}
+# plot log(income) vs target using boxplot
+train %>%
+  ggplot(aes(x = log(AMT_INCOME_TOTAL), y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Log Income vs Target", y = "Target", x = "Log Total Income") +
+  theme_minimal()
+```
+
+Yes, taking the log did bring in the outlier.
+
+### Date Fields
+
+Some of the date fields had minimums or maximums that didn't make sense. Let's check all date fields at once by creating a new data set with logical fields to identify possible mistaken values.
+
+```{r, results='hide'}
+# make a new data set with logic to check if any date values don't make sense
+train_dates <- train[,c(1,18,19,20,21,96)] %>%
+  mutate(yr_birth = round(DAYS_BIRTH/365,1),
+         flag_birth = ifelse(yr_birth >(-18), "child?/mistaken pos.?",
+                             ifelse(yr_birth<(-80),"too old?",NA)),
+         yr_employ = round(DAYS_EMPLOYED/365,1),
+         flag_employ = ifelse(yr_employ < (yr_birth+14),"employed longer than makes sense?",
+                              ifelse(yr_employ >0, "mistaken pos.",NA)),
+         yr_reg = round(DAYS_REGISTRATION/365,1),
+         flag_reg = ifelse(yr_reg < (yr_birth+14),"reg. earlier than makes sense?",
+                           ifelse(yr_reg > 0, "mistaken pos.",NA)),
+         yr_id_pub = round(DAYS_ID_PUBLISH/365,1),
+         flag_id_pub = ifelse(yr_id_pub < yr_birth,"ID before birth?",
+                              ifelse(yr_id_pub >0, "mistaken pos.",NA)),
+         yr_ph_ch = round(DAYS_LAST_PHONE_CHANGE/365,1),
+         flag_ph_ch = ifelse(yr_ph_ch < (yr_birth+14),"ph. change earlier than makes sense?",
+                             ifelse(yr_ph_ch >0, "mistaken pos.",NA))
+  )
+
+# view first few rows (note: lengthy result suppressed)
+head(train_dates)
+```
+
+Looks like the new data set works. Now, look at each of the data sets
+
+```{r, results='hide'}
+# note: output suppressed due to some lengthy tables
+
+# look at only DAYS_BIRTH
+filter(train_dates[,c(1,2,7,8)], !is.na(flag_birth)) %>%
+  gt() %>%
+  tab_header(title="Flags for DAYS_BIRTH")
+
+# look at only DAYS_EMPLOYED 
+filter(train_dates[,c(1,3,9,10)], !is.na(flag_employ)) %>%
+  gt() %>%
+  tab_header(title="Flags for DAYS_EMPLOYED")
+
+# look at only DAYS_REGISTRATION
+filter(train_dates[,c(1,7,4,11,12)], !is.na(flag_reg)) %>%
+  gt() %>%
+  tab_header(title="Flags for DAYS_REGISTRATION")
+
+# look at only DAYS_ID_PUBLISH
+filter(train_dates[,c(1,7,5,13,14)], !is.na(flag_id_pub)) %>%
+  gt() %>%
+  tab_header(title="Flags for DAYS_ID_PUBLISH")
+
+# look at only DAYS_LAST_PHONE_CHANGE
+filter(train_dates[,c(1,7,6,15,16)], !is.na(flag_ph_ch)) %>%
+  gt() %>%
+  tab_header(title="Flags for DAYS_LAST_PHONE_CHANGE")
+```
+
+There are no flags for possibly mistaken ages, days since ID published, or days since last phone change.
+
+
+The days employed seems to have a lot of rows with the same value. Additionally, I may have misunderstood what "registration" means. Let's look into `DAYS_EMPLOYED` by seeing how many rows have that 300-thousand value:
+
+```{r}
+# count rows by DAYS_EMPLOYED
+train_dates %>%
+  filter(!is.na(flag_employ)) %>%
+  group_by(DAYS_EMPLOYED) %>%
+  summarise(count = n())
+```
+
+365243 is such a weird number to have so many of! I was expecting typos but maybe this variable was gathered automatically and there was a glitch in calculation (e.g. the applicant enters a date and it is transformed into a "days before application"). This is a high proportion of the data set (about 1/6) to impute, so for now let's remove this field.
+
+For `DAYS_REGISTRATION`: I thought driver, insurance, or voter registration that would happen to a teen-to-adult aged person, but perhaps it's something that can be done during childhood. Let's change the cutoff to match their age and try again:
+
+```{r}
+# change cutoff for first flag
+train_dates <- train_dates %>%
+  mutate(flag_reg = ifelse(yr_reg < yr_birth,"before birth?",
+                           ifelse(yr_reg > 0, "mistaken pos.",NA)))
+
+# look at only DAYS_REGISTRATION
+filter(train_dates[,c(1,7,4,11,12)], !is.na(flag_reg)) %>%
+  gt() %>%
+  tab_header(title="Flags for DAYS_REGISTRATION")
+```
+
+No rows have concerns with registration now.
+
+### Car Age
+
+The train set had a maximum `OWN_CAR_AGE` of 91 and the test 74. Let's see if those are outliers by plotting the train set.
+
+```{r}
+# plot OWN_CAR_AGE vs TARGET using boxplot
+train %>%
+  ggplot(aes(x = OWN_CAR_AGE, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Car Age vs Target", y = "Target", x = "Car Age") +
+  theme_minimal()
+```
+
+The old cars look like outliers, but according to the internet and a nearby antique car show, cars over 100 years old can still drive today. When modeling we can try logging, but both Target factors will be dragged down by many NAs being imputed with 0 so the outliers may not have much effect.
+
+### Social Circle
+
+There are some notable maximums in the social circle variables, including over 300 for the observable days past due versions and 20s-30s for the defaulted on the days past due versions. 
+
+<details><summary>**Click here to view all 4 boxplots**</summary>
+
+```{r}
+# boxplot of OBS_30_CNT_SOCIAL_CIRCLE vs target
+train %>%
+  ggplot(aes(x = OBS_30_CNT_SOCIAL_CIRCLE, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Social Circle Observations 30 Days vs Target", y = "Target", x = "OBS_30_CNT_SOCIAL_CIRCLE") +
+  theme_minimal()
+
+# boxplot of DEF_30_CNT_SOCIAL_CIRCLE vs target
+train %>%
+  ggplot(aes(x = DEF_30_CNT_SOCIAL_CIRCLE, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Social Circle Default 30 Days vs Target", y = "Target", x = "DEF_30_CNT_SOCIAL_CIRCLE") +
+  theme_minimal()
+
+# boxplot of OBS_60_CNT_SOCIAL_CIRCLE vs target
+train %>%
+  ggplot(aes(x = OBS_60_CNT_SOCIAL_CIRCLE, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Social Circle Observations 60 Days vs Target", y = "Target", x = "OBS_60_CNT_SOCIAL_CIRCLE") +
+  theme_minimal()
+
+# boxplot of DEF_60_CNT_SOCIAL_CIRCLE vs target
+train %>%
+  ggplot(aes(x = DEF_60_CNT_SOCIAL_CIRCLE, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Social Circle Default 60 Days vs Target", y = "Target", x = "DEF_60_CNT_SOCIAL_CIRCLE") +
+  theme_minimal()
+```
+
+</details>
+
+
+```{r, results='hide'}
+# view the row with over 300 (note: lengthy output suppressed)
+filter(train,OBS_30_CNT_SOCIAL_CIRCLE>50)
+```
+
+It looks like this one client (SK_ID_CURR = 272071) has the outliers for all the social circle variables. We could remove this row, but the test set had similar outlying maximums. The data dictionary doesn't clarify what "social circle" is, but it could be external information such as location data. This client is a policeman that works in a different city than where he lives, so may come into contact with many individuals---there may be future applicants in similar situations with outlier data, so let's leave this. During modeling we can test taking the log and seeing if that changes the prediction power.
+
+### Credit Bureaus
+
+The train set has some large maximums that don't have similar values in test set.
+
+```{r}
+# get maximums for train set
+train %>%
+  mutate(AMT_REQ_CREDIT_BUREAU_HOUR = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_HOUR),0,AMT_REQ_CREDIT_BUREAU_HOUR),
+         AMT_REQ_CREDIT_BUREAU_DAY = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_DAY),0,AMT_REQ_CREDIT_BUREAU_DAY),
+         AMT_REQ_CREDIT_BUREAU_WEEK = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_WEEK),0,AMT_REQ_CREDIT_BUREAU_WEEK),
+         AMT_REQ_CREDIT_BUREAU_MON = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_MON),0,AMT_REQ_CREDIT_BUREAU_MON),
+         AMT_REQ_CREDIT_BUREAU_QRT = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_QRT),0,AMT_REQ_CREDIT_BUREAU_QRT),
+         AMT_REQ_CREDIT_BUREAU_YEAR = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_YEAR),0,AMT_REQ_CREDIT_BUREAU_YEAR)
+  ) %>%
+  summarise(max_hour = max(AMT_REQ_CREDIT_BUREAU_HOUR),
+            max_day = max(AMT_REQ_CREDIT_BUREAU_DAY),
+            max_week = max(AMT_REQ_CREDIT_BUREAU_WEEK),
+            max_mon = max(AMT_REQ_CREDIT_BUREAU_MON),
+            max_qrt = max(AMT_REQ_CREDIT_BUREAU_QRT),
+            max_year = max(AMT_REQ_CREDIT_BUREAU_YEAR)
+  )
+
+# get maximums for test set
+test %>%
+  mutate(AMT_REQ_CREDIT_BUREAU_HOUR = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_HOUR),0,AMT_REQ_CREDIT_BUREAU_HOUR),
+         AMT_REQ_CREDIT_BUREAU_DAY = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_DAY),0,AMT_REQ_CREDIT_BUREAU_DAY),
+         AMT_REQ_CREDIT_BUREAU_WEEK = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_WEEK),0,AMT_REQ_CREDIT_BUREAU_WEEK),
+         AMT_REQ_CREDIT_BUREAU_MON = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_MON),0,AMT_REQ_CREDIT_BUREAU_MON),
+         AMT_REQ_CREDIT_BUREAU_QRT = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_QRT),0,AMT_REQ_CREDIT_BUREAU_QRT),
+         AMT_REQ_CREDIT_BUREAU_YEAR = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_YEAR),0,AMT_REQ_CREDIT_BUREAU_YEAR)
+  ) %>%
+  summarise(max_hour = max(AMT_REQ_CREDIT_BUREAU_HOUR),
+            max_day = max(AMT_REQ_CREDIT_BUREAU_DAY),
+            max_week = max(AMT_REQ_CREDIT_BUREAU_WEEK),
+            max_mon = max(AMT_REQ_CREDIT_BUREAU_MON),
+            max_qrt = max(AMT_REQ_CREDIT_BUREAU_QRT),
+            max_year = max(AMT_REQ_CREDIT_BUREAU_YEAR)
+  )
+```
+Let's look at the month and quarter for the train set.
+
+```{r}
+# AMT_REQ_CREDIT_BUREAU_MON boxplot
+train %>%
+  ggplot(aes(x = AMT_REQ_CREDIT_BUREAU_MON, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "AMT_REQ_CREDIT_BUREAU_MON vs Target", y = "Target", x = "AMT_REQ_CREDIT_BUREAU_MON") +
+  theme_minimal()
+
+# AMT_REQ_CREDIT_BUREAU_QRT boxplot
+train %>%
+  ggplot(aes(x = AMT_REQ_CREDIT_BUREAU_QRT, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "AMT_REQ_CREDIT_BUREAU_QRT vs Target", y = "Target", x = "AMT_REQ_CREDIT_BUREAU_QRT") +
+  theme_minimal()
+```
+
+The `AMT_REQ_CREDIT_BUREAU_MON` doesn't look too much like an outlier, but `AMT_REQ_CREDIT_BUREAU_QRT` maximum is significantly more than other values. Let's look at that row:
+
+```{r, results='hide'}
+# view the row with over 200 (note: lengthy output suppressed)
+filter(train,AMT_REQ_CREDIT_BUREAU_QRT>50)
+```
+
+Because the quarter excludes the month prior to application, this person had 261 credit hits in a 2 month period, but only 1 in the other 10 months of the year! This definitely could have been a mistaken value. The next highest value is 19 and the column mean is 0. Since some other fields had maximum of 1 credit inquiry per day or more, I'll set an arbitrary cutoff of 60 for the quarter (minus the most recent month) and impute anything above that with the cap.
+
+## Clean and modify data
+
+Clean the test set, making one version with the high NA columns removed and one where they're retained.
+
+<details><summary>**Click here to view cleaning and selecting code**</summary>
+
+```{r}
+# mutate train_factored with the remaining transformations (factors done earlier)
+train_clean <- train_factored %>%
+  mutate(AMT_INCOME_TOTAL = log(AMT_INCOME_TOTAL),
+         AMT_ANNUITY = ifelse(is.na(AMT_ANNUITY),0,AMT_ANNUITY),
+         AMT_GOODS_PRICE = ifelse(is.na(AMT_GOODS_PRICE),0,AMT_GOODS_PRICE),
+         OWN_CAR_AGE = ifelse(is.na(OWN_CAR_AGE),0,OWN_CAR_AGE),
+         CNT_FAM_MEMBERS = ifelse(is.na(CNT_FAM_MEMBERS),0,CNT_FAM_MEMBERS),
+         EXT_SOURCE_2 = ifelse(is.na(EXT_SOURCE_2),mean(EXT_SOURCE_2),EXT_SOURCE_2),
+         EXT_SOURCE_3 = ifelse(is.na(EXT_SOURCE_3),mean(EXT_SOURCE_3),EXT_SOURCE_3),
+         OBS_30_CNT_SOCIAL_CIRCLE = ifelse(is.na(OBS_30_CNT_SOCIAL_CIRCLE),0,OBS_30_CNT_SOCIAL_CIRCLE),
+         DEF_30_CNT_SOCIAL_CIRCLE = ifelse(is.na(DEF_30_CNT_SOCIAL_CIRCLE),0,DEF_30_CNT_SOCIAL_CIRCLE),
+         OBS_60_CNT_SOCIAL_CIRCLE = ifelse(is.na(OBS_60_CNT_SOCIAL_CIRCLE),0,OBS_60_CNT_SOCIAL_CIRCLE),
+         DEF_60_CNT_SOCIAL_CIRCLE = ifelse(is.na(DEF_60_CNT_SOCIAL_CIRCLE),0,DEF_60_CNT_SOCIAL_CIRCLE),
+         AMT_REQ_CREDIT_BUREAU_HOUR = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_HOUR),0,AMT_REQ_CREDIT_BUREAU_HOUR),
+         AMT_REQ_CREDIT_BUREAU_DAY = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_DAY),0,AMT_REQ_CREDIT_BUREAU_DAY),
+         AMT_REQ_CREDIT_BUREAU_WEEK = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_WEEK),0,AMT_REQ_CREDIT_BUREAU_WEEK),
+         AMT_REQ_CREDIT_BUREAU_MON = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_MON),0,AMT_REQ_CREDIT_BUREAU_MON),
+         AMT_REQ_CREDIT_BUREAU_QRT = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_QRT),0,AMT_REQ_CREDIT_BUREAU_QRT),
+         AMT_REQ_CREDIT_BUREAU_QRT = ifelse(AMT_REQ_CREDIT_BUREAU_QRT >60, 60, AMT_REQ_CREDIT_BUREAU_QRT),
+         AMT_REQ_CREDIT_BUREAU_YEAR = ifelse(is.na(AMT_REQ_CREDIT_BUREAU_YEAR),0,AMT_REQ_CREDIT_BUREAU_YEAR)
+         ) %>%
+  filter(!is.na(DAYS_LAST_PHONE_CHANGE))
+
+# select to remove columns determined as too high NAs
+train_clean_select <- train_clean %>%
+  select(-DAYS_EMPLOYED,
+         -EXT_SOURCE_1,
+         -APARTMENTS_AVG,
+         -BASEMENTAREA_AVG,
+         -YEARS_BEGINEXPLUATATION_AVG,
+         -YEARS_BUILD_AVG,
+         -COMMONAREA_AVG,
+         -ELEVATORS_AVG,
+         -ENTRANCES_AVG,
+         -FLOORSMAX_AVG,
+         -FLOORSMIN_AVG,
+         -LANDAREA_AVG,
+         -LIVINGAPARTMENTS_AVG,
+         -LIVINGAREA_AVG,
+         -NONLIVINGAPARTMENTS_AVG,
+         -NONLIVINGAREA_AVG,
+         -APARTMENTS_MODE,
+         -BASEMENTAREA_MODE,
+         -YEARS_BEGINEXPLUATATION_MODE,
+         -YEARS_BUILD_MODE,
+         -COMMONAREA_MODE,
+         -ELEVATORS_MODE,
+         -ENTRANCES_MODE,
+         -FLOORSMAX_MODE,
+         -FLOORSMIN_MODE,
+         -LANDAREA_MODE,
+         -LIVINGAPARTMENTS_MODE,
+         -LIVINGAREA_MODE,
+         -NONLIVINGAPARTMENTS_MODE,
+         -NONLIVINGAREA_MODE,
+         -APARTMENTS_MEDI,
+         -BASEMENTAREA_MEDI,
+         -YEARS_BEGINEXPLUATATION_MEDI,
+         -YEARS_BUILD_MEDI,
+         -COMMONAREA_MEDI,
+         -ELEVATORS_MEDI,
+         -ENTRANCES_MEDI,
+         -FLOORSMAX_MEDI,
+         -FLOORSMIN_MEDI,
+         -LANDAREA_MEDI,
+         -LIVINGAPARTMENTS_MEDI,
+         -LIVINGAREA_MEDI,
+         -NONLIVINGAPARTMENTS_MEDI,
+         -NONLIVINGAREA_MEDI,
+         -TOTALAREA_MODE
+         )
+```
+
+</details>
+
+# Explore Data Relationships
+
+## Classification Tree Model
+
+Create a classification tree to identify some strong predictors, trying out both versions of the clean data.
+
+```{r}
+#create classification tree model
+tree_model1 <- rpart(formula = TARGET ~.,
+                    data = train_clean)
+
+tree_model1
+
+#create classification tree model
+tree_model2 <- rpart(formula = TARGET ~.,
+                    data = train_clean_select)
+
+tree_model2
+```
+
+The unbalanced target apparently doesn't work well with the classification tree model since they're recommending majority class!
+
+## Relationships that could make sense
+
+From reviewing the data dictionary and how loans work, I've identified some potential predictors that might vary by target population.
+
+### Debt-to-Income Ratio
+
+Earlier, `AMT_INCOME_TOTAL` didn't seem to have much correlation either originally or logged. However, financial advice often mentions debt-to-income ratios. Let's see if the loan amount divided by income may reflect the target variable:
+
+```{r}
+# Boxplot of credit/income
+train_clean %>%
+  ggplot(aes(x = AMT_CREDIT/AMT_INCOME_TOTAL, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Credit to Income by Target", y = "Target", x = "Credit/Income") +
+  theme_minimal()
+```
+
+The target populations have nearly the same median and almost completely overlapping interquartile ranges.
+
+### Education
+
+Higher education levels can correspond with greater income, and perhaps also greater education on fiscal responsibility.
+
+```{r}
+# Barplot of education type and target
+train_clean %>%
+  group_by(TARGET,NAME_EDUCATION_TYPE) %>%
+  summarise (count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(proportion = count/sum(count)) %>% # create proportion to make imbalanced target more comparable
+  ggplot(aes(x = factor(TARGET), y = proportion, fill=factor(NAME_EDUCATION_TYPE))) +
+  geom_col(stat = "identity", position="dodge") +
+  labs(title = "Proportion of Education Type by Target", fill = "Education Type", x = "Target", y = "Proportion") +
+  theme_minimal()
+```
+
+There looks to be a higher proportion of "Secondary/secondary special" and lower "Higher education" in the target population that had trouble with repayments. During modeling we can see if those are significant and useful in the model.
+
+### Job/Occupation
+
+The fields `NAME_INCOME_TYPE`, `OCCUPATION_TYPE` and `ORGANIZATION_TYPE` may have some indicators for stability of income. For example, in "Government" may be more stable than "Self-employed" org types, and "Core Staff" may be more stable than "Laborer" occupation types. `ORGANIZATION_TYPE` has significantly greater unique values (58) than `NAME_INCOME_TYPE` (8) and `OCCUPATION_TYPE` (19), so we'll start with these two.
+
+```{r}
+# Barplot of income type and target
+train_clean %>%
+  group_by(TARGET,NAME_INCOME_TYPE) %>%
+  summarise (count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(proportion = count/sum(count)) %>% # create proportion to make imbalanced target more comparable
+  ggplot(aes(x = factor(TARGET), y = proportion)) +
+  geom_col(position = "dodge") +
+  facet_wrap(facets=~factor(NAME_INCOME_TYPE)) + # facet to compare each income type separately
+  labs(title = "Proportion of Target by Income Type", x = "Target", y = "Proportion")
+```
+
+Pensioner and Working have the greatest difference between target populations. However, the income types are inconsistent (e.g. "Businessman", "Commercial associate", and "State servant" seem like they should fall under the category "Working"), so this may not be an ideal field to use.
+
+```{r}
+# Barplot of occupation type and target
+train_clean %>%
+  group_by(TARGET,OCCUPATION_TYPE) %>%
+  summarise (count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(proportion = count/sum(count)) %>% # create proportion to make imbalanced target more comparable
+  ggplot(aes(x = factor(TARGET), y = proportion)) +
+  geom_col(position = "dodge") +
+  facet_wrap(facets=~factor(OCCUPATION_TYPE)) + # facet to compare each occupation type separately
+  labs(title = "Proportion of Target by Occupation Type", x = "Target", y = "Proportion")
+```
+
+A few of these seem to have noticeable difference, but the largest two appear to be empty values and Laborers. This is worth checking further during modeling to see if this is a useful predictor.
+
+With a large number of types, `ORGANIZATION_TYPE` is likely easier read as a table:
+
+```{r, results='hide'}
+# Table of org type and target (note: lengthy output suppressed)
+train_clean %>%
+  group_by(TARGET,ORGANIZATION_TYPE) %>%
+  summarise (count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(percent = round(count/sum(count)*100,2)) %>% # percent to make imbalanced targets comparable
+  pivot_wider(names_from=TARGET,values_from=c(count,percent)) %>% # pivot table so target is across the top
+  mutate(difference = percent_0 - percent_1) %>% #add col for difference
+  select(-count_0,-count_1) %>% # remove unneeded columns
+  gt() %>%
+  tab_header(title="Percent of Org Type by Target")
+```
+
+Most of these values look similar. Only 4 types of organizations have a difference of 1 or more (absolute value): XNA, Self-employed, Construction, and Business Entity Type 3.
+
+### Family Size
+
+Larger families have to spend more to take care of more people, so if money gets tight maybe they might be more likely to have problems paying on debt.
+
+```{r}
+# Boxplot of family members
+train_clean %>%
+  ggplot(aes(x = log(CNT_FAM_MEMBERS), y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "log(Family Members) by Target", y = "Target", x = "log(Family Members)") +
+  theme_minimal()
+```
+
+There wasn't a notable difference between `CNT_FAM_MEMBERS` normally or logged (as shown). Nor was there a difference in `CNT_CHILDREN`.
+
+
+### Year of Bureau Inquiries
+
+Earlier, we didn't see a difference in quarter and month. Let's check the other ones:
+
+```{r}
+# AMT_REQ_CREDIT_BUREAU_YEAR boxplot
+train_clean %>%
+  ggplot(aes(x = AMT_REQ_CREDIT_BUREAU_YEAR, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "AMT_REQ_CREDIT_BUREAU_YEAR vs Target", y = "Target", x = "AMT_REQ_CREDIT_BUREAU_YEAR") +
+  theme_minimal()
+```
+
+Hour, Day, Week, and Year (shown) have no notable difference.
+
+### Region Ratings
+
+The data dictionary says "Our rating", so it is unclear where this data comes from or what is considered a region. In the US, small regions such as counties and cities are often associated with income and social class and also associated with race. Using ratings such as this used in a model to make financial decisions should be considered with caution as they have the potential to perpetuate systemic racism and inequalities.
+
+```{r}
+# Barplot of region rating and target
+train_clean %>%
+  group_by(TARGET,REGION_RATING_CLIENT) %>%
+  summarise (count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(proportion = count/sum(count)) %>% # create proportion to make imbalanced target more comparable
+  ggplot(aes(x = factor(TARGET), y = proportion, fill=factor(REGION_RATING_CLIENT))) +
+  geom_col(stat = "identity", position="dodge") +
+  labs(title = "Proportion of Region Rating by Target", fill = "Region Rating", x = "Target", y = "Proportion") +
+  theme_minimal()
+
+# Barplot of region rating and target
+train_clean %>%
+  group_by(TARGET,REGION_RATING_CLIENT_W_CITY) %>%
+  summarise (count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(proportion = count/sum(count)) %>% # create proportion to make imbalanced target more comparable
+  ggplot(aes(x = factor(TARGET), y = proportion, fill=factor(REGION_RATING_CLIENT_W_CITY))) +
+  geom_col(stat = "identity", position="dodge") +
+  labs(title = "Proportion of Region + City Rating by Target", fill = "Region + City Rating", x = "Target", y = "Proportion") +
+  theme_minimal()
+```
+
+These two variables have almost the same proportions of each rating. Both may have approximately 5% difference in Regions 1 and 3.
+
+## Test building spec relationships
+
+The building specification relationships all had high NAs, and they all have the same description in the data dictionary so some are not clear by the name what it means. I'll run through all of them but will only share the code once, starting with a boxplot for numeric variables:
+
+```{r}
+# NONLIVINGAPARTMENTS_MEDI vs TARGET boxplot
+train_clean %>%
+  ggplot(aes(x = NONLIVINGAPARTMENTS_MEDI, y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of NONLIVINGAPARTMENTS_MEDI vs Target", y = "Target", x = "NONLIVINGAPARTMENTS_MEDI") +
+  theme_minimal()
+```
+
+None of the numeric variables differed between target populations. Many, like `NONLIVINGAPARTMENTS_MEDI` shown above, had very small interquartile ranges, so taking the log may shrink the range and show more detail at the smaller values, however with the large proportion of missing I think all these columns should be ignored during modeling. 
+
+For factored variables, let's use a barplot instead:
+
+```{r}
+# Barplot of EMERGENCYSTATE_MODE and target
+train_clean %>%
+  group_by(TARGET,EMERGENCYSTATE_MODE) %>%
+  summarise (count = n()) %>%
+  group_by(TARGET) %>%
+  mutate(proportion = count/sum(count)) %>% # create proportion to make imbalanced target more comparable
+  ggplot(aes(x = factor(EMERGENCYSTATE_MODE), y = proportion, fill=factor(TARGET))) +
+  geom_col(stat = "identity", position="dodge") +
+  labs(title = "Proportion of EMERGENCYSTATE_MODE by Target", fill = "Target", x = "EMERGENCYSTATE_MODE", y = "Proportion") +
+  theme_minimal()
+```
+
+Finding summary:
+
+* `FONDKAPREMONT_MODE` had 2 of their 5 factors that were about 0.05 proportion difference, including empty fields.  
+* `HOUSETYPE_MODE` also had 2/4 factors with some difference, including empty.  
+* `WALLSMATERIAL_MODE` has 2/8 factors with approximately 0.05 or more, including empty.  
+* `EMERGENCYSTATE_MODE` (shown) has 2/3 factors with approximately 0.05 or more; empty and no.  
+
+All of these had a large proportion of empty values in addition to all the NAs. We could impute the NAs to empty, but I think that none of these are likely useful predictors.
+
+# Additional Data Files
+
+In addition to the application, there were additional data files provided.
+
+The two that I think could be most useful are as follows:
+
+* bureau: previous and current credit lines from credit bureau for clients  
+* bureau_balance: monthly status (active, closed, or overdue) of previous credit lines from credit bureau for clients
+
+## Bureau_balance
+
+Bureau_balance.csv contains a row for each month of each credit line. It has only 3 columns: `SK_ID_BUREAU` (which will have to join to bureau.csv to be able to connect to a `SK_ID_CURR`), month of the balance (as negative value with -1 being most recent month), and the current status. Statuses of 1-5 indicate categories of days past due, 0 is not overdue, and other indicators for unknown or closed.
+
+Note: Data dictionary is incorrect. The ID column is actually named `SK_ID_BUREAU` for both this data and bureau_balance.
+
+We'll summarize this data set into a single row for each credit line with some summary statistics that may be useful, only taking into affect the last 5 years worth of data, so previous late payments won't be penalized.
+
+```{r}
+# create summary statistics for how much each credit line was overdue
+bur_bal_summary <- bureau_balance %>%
+#  filter(MONTHS_BALANCE >= -60) %>%     #look at only the most recent 5 years of data
+  mutate(status_num = ifelse(STATUS=="X","0",     # make X into 0
+                             ifelse(STATUS=="C","0",STATUS)),     # make C into 0
+         status_num = as.numeric(status_num)) %>%      #convert chr column into numeric
+  group_by(SK_ID_BUREAU) %>%                    #create one row per credit line
+  summarise(count_dpd = sum(status_num > 0),     #number of months with overdue payment
+            mean_dpd = mean(status_num),       #average months with overdue payment
+            max_dpd = max(status_num))         #maximum category of overdue length
+
+# view row that should have 0 dpd
+bur_bal_summary %>%
+  filter(SK_ID_BUREAU == "5715448")
+
+# view row that has at least 1 dpd
+bur_bal_summary %>%
+  filter(SK_ID_BUREAU == "5715793")
+```
+
+## Bureau
+
+Bureau has information on active and closed credit lines. Let's filter to look at only the max overdue the credit line has been, current credit amount, current debt, and current limit, and then combine each line of credit with the bureau_balance data.
+
+```{r, results='hide'}
+# make a filtered set of possible useful values from bureau
+bureau_filter <- bureau %>%
+  select(SK_ID_CURR, SK_ID_BUREAU, AMT_CREDIT_MAX_OVERDUE, AMT_CREDIT_SUM,
+         AMT_CREDIT_SUM_DEBT, AMT_CREDIT_SUM_LIMIT)
+
+# join the filtered bureau set with the bureau_balance data
+bureau_combo <- merge(x = bureau_filter, y = bur_bal_summary, by ="SK_ID_BUREAU", all.x = TRUE)
+
+# view first few rows (note: lengthy output suppressed)
+head(bureau_combo)
+```
+
+Looks like they merged correctly.
+
+Now, let's combine the rows per each credit line into one summary line per `SK_ID_CURR`:
+
+```{r, results='hide'}
+# make final bureau data set with one row per SK_ID_CURR
+bureau_data <- bureau_combo %>%
+  mutate(AMT_CREDIT_MAX_OVERDUE = ifelse(is.na(AMT_CREDIT_MAX_OVERDUE),0,AMT_CREDIT_MAX_OVERDUE),
+         AMT_CREDIT_SUM = ifelse(is.na(AMT_CREDIT_SUM),0,AMT_CREDIT_SUM),
+         AMT_CREDIT_SUM_DEBT = ifelse(is.na(AMT_CREDIT_SUM_DEBT),0,AMT_CREDIT_SUM_DEBT),
+         AMT_CREDIT_SUM_LIMIT = ifelse(is.na(AMT_CREDIT_SUM_LIMIT),0,AMT_CREDIT_SUM_LIMIT),
+         count_dpd = ifelse(is.na(count_dpd),0,count_dpd),
+         mean_dpd = ifelse(is.na(mean_dpd),0,mean_dpd),
+         max_dpd = ifelse(is.na(max_dpd),0,max_dpd)
+  ) %>%   #mutate for all rows to turn NAs into 0
+  group_by(SK_ID_CURR) %>%
+  summarise(max_overdue = max(AMT_CREDIT_MAX_OVERDUE),   # max overdue on current/prev credit line
+            total_credit = sum(AMT_CREDIT_SUM),     # total current bureau credit
+            total_debt = sum(AMT_CREDIT_SUM_DEBT),    # total current debt on the bureau credit
+            credit_limit = sum(AMT_CREDIT_SUM_LIMIT),    # total current credit limit
+            count_dpd = sum(count_dpd),     #number of months with overdue payment
+            mean_dpd = mean(mean_dpd),    #average months with overdue payment
+            max_dpd = max(max_dpd)     #maximum category of overdue length
+            )
+
+# view summarized table (note: lengthy output suppressed)
+head(bureau_data)
+```
+
+Now I have a combined table of all bureau data, let's merge it with the cleaned and filtered train application data. This will introduce more NAs where right data set (bureau_data) does not have a corresponding value with the train data, so change those NAs to zero.
+
+```{r, results='hide'}
+# Combine bureau to train_clean
+train_clean_with_bur <- merge(x = train_clean_select, y = bureau_data, by ="SK_ID_CURR", all.x = TRUE) %>%
+    mutate(max_overdue = ifelse(is.na(max_overdue),0,max_overdue),
+           total_credit = ifelse(is.na(total_credit),0,total_credit),
+           total_debt = ifelse(is.na(total_debt),0,total_debt),
+           credit_limit = ifelse(is.na(credit_limit),0,credit_limit),
+           count_dpd = ifelse(is.na(count_dpd),0,count_dpd),
+           mean_dpd = ifelse(is.na(mean_dpd),0,mean_dpd),
+           max_dpd = ifelse(is.na(max_dpd),0,max_dpd)
+    )
+
+# view first few rows (note: lengthy output suppressed)
+head(train_clean_with_bur)
+```
+
+## Test Relationships
+
+Let's see if any of the features we extracted from the additional data sets have predictive value to a potential model:
+
+<details><summary>**Click here to view first 4 boxplots**</summary>
+
+```{r}
+# max_overdue vs TARGET boxplot
+train_clean_with_bur %>%
+  ggplot(aes(x = log(max_overdue), y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Max Overdue vs Target", y = "Target", x = "log(Max Overdue)") +
+  theme_minimal()
+
+# total_credit vs TARGET boxplot
+train_clean_with_bur %>%
+  ggplot(aes(x = log(total_credit), y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Total Credit vs Target", y = "Target", x = "log(Total Credit Bureau Credit)") +
+  theme_minimal()
+
+# total_debt vs TARGET boxplot
+train_clean_with_bur %>%
+  ggplot(aes(x = log(total_debt), y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Total Debt vs Target", y = "Target", x = "log(Total Credit Bureau Debt)") +
+  theme_minimal()
+
+# credit_limit vs TARGET boxplot
+train_clean_with_bur %>%
+  ggplot(aes(x = log(credit_limit), y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Total Credit Limit vs Target", y = "Target", x = "log(Total Credit Bureau Credit Limit)") +
+  theme_minimal()
+```
+
+</details>
+
+
+None of the summary values chosen from the original bureau set seem to vary across target populations (normal or logged). During modeling, we could further explore combining factors, such as credit utilization percentage which is used in creating a credit score.
+
+Since overdue payments are the criteria for the target of "payment difficulties", perhaps the bureau_balance summary fields may be more useful predictors:
+
+<details><summary>**Click here to view last 3 boxplots**</summary>
+
+```{r}
+# count_dpd vs TARGET boxplot
+train_clean_with_bur %>%
+  ggplot(aes(x = log(count_dpd), y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Number of Months with Overdue Payments vs Target", y = "Target", x = "Number of Months Overdue") +
+  theme_minimal()
+
+# mean_dpd vs TARGET boxplot
+train_clean_with_bur %>%
+  ggplot(aes(x = log(mean_dpd), y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Avg Number of Months with Overdue Payments vs Target", y = "Target", x = "Avg Number of Months Overdue") +
+  theme_minimal()
+
+# max_dpd vs TARGET boxplot
+train_clean_with_bur %>%
+  ggplot(aes(x = log(max_dpd), y = factor(TARGET))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Max Months Overdue vs Target", y = "Target", x = "Max Months of Overdue Payments on Single Credit Line") +
+  theme_minimal()
+```
+
+</details>
+
+
+None of these are useful predictors either (normal or logged). During modeling, we could try proportions instead of counts and maximums.
+
+# Results
+
+This is a complex data set, with a very large imbalance in the target variable of 92% in the majority class and 8% in the minority class. Many of the variables have very high proportions of NA values without explanation or clear way to address them. Some rows seemed to have outlier values, but things like income and number of children can have large variation normally within the population, so most outliers were not removed. Taking the natural log of some variables helped bring in outliers.
+
+I've identified some variables that don't seem to correlate with the target and some that could be useful when modeling. Potentially useful predictors include the following:
+
+* NAME_INCOME_TYPE
+* NAME_EDUCATION_TYPE
+* OCCUPATION_TYPE
+* REGION_RATING_CLIENT
+* REGION_RATING_CLIENT_W_CITY
+* EXT_SOURCE_2
+* EXT_SOURCE_3
+* [...]_CNT_SOCIAL_CIRCLE (all 4 variables, might be useful if logged)
+
+For the modeling approach, I have experience with only classification trees and logistic regression for binary variables. This EDA has ruled out classification tree as it selected majority class classifier! I will start with logistic regression and the variables identified above.
+
+My tests with the additional data files were not very successful. It may be beneficial to research deeper into what aspects of previous credit are used as indicators of "good" credit, or I can choose to focus on only application data.

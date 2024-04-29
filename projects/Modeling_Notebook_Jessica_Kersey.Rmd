@@ -1,0 +1,855 @@
+---
+title: "Modeling_Notebook"
+author: "Jessica Kersey"
+date: "2024-03-31"
+output:
+  html_document:
+    toc: true
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+# Introduction
+
+**Kaggle Competition:** Home Credit Default Risk
+
+**Competition Link:** <https://www.kaggle.com/competitions/home-credit-default-risk>
+
+**Business Problem Summary:** Home Credit wants to serve customers who are unbanked or lack credit history, so they need to identify if an applicant is capable of repayment or likely to have payment difficulties.
+
+**Analytics Problem Summary:** Create a supervised model to predict whether or not the client is likely to have difficulties repaying the loan based on the application and other data. The target variable is binary where 1 indicates "payment difficulties", characterized by the client meeting a certain threshold of late payments in the first threshold number of installments. A classification model such as a classification tree or logistic regression will be used.
+
+**Notebook Purpose:** This notebook will cover the modeling process and findings.
+
+<br>
+<br>
+
+# Prepare Data
+
+```{r, results='hide'}
+install.packages('Rtools')
+install.packages('tidytext')
+install.packages('glmnet')
+install.packages('caret')
+install.packages('xgboost')
+install.packages('car')
+install.packages('tidymodels')
+install.packages('vip')
+install.packages('DALEXtra')
+install.packages('plotROC')
+install.packages('pROC')
+```
+
+Load library packages
+
+```{r}
+#load library packages
+library(tidyverse) #for advanced stats including dplyr and ggplot
+library(skimr) #for advanced stats
+library(gt) #for table formatting
+library(knitr) #for table formatting
+library(psych) #for correlation matrix
+library(caret) #for data partition
+library(rmarkdown)
+library(dplyr)
+library(tidytext)
+library(tidyr)
+library(DataExplorer) #Data Exploration
+library(ggplot2)
+library(glmnet) # For logistic regression
+library(xgboost) # For gradient boosted trees
+library(car) #vif
+library(vip) # Plotting independent variable importance
+library(DALEXtra) # Creating PDP functions and graphs
+library(plotROC) #visualize AUC
+library(pROC) #calculate AUC
+library(tictoc)
+```
+
+Load data
+
+```{r}
+# load train data
+train <- read.csv("application_train.csv")
+
+# load test data
+test <- read.csv("application_test.csv")
+
+# bureau
+bureau <- read.csv("bureau.csv")
+
+# bureau_balance
+bureau_balance <- read.csv("bureau_balance.csv")
+```
+
+<br>
+<br>
+
+## Format and Clean Data
+
+Factor all values that are numeric or binary that represent categorical data.
+
+```{r, results = 'hide'}
+#view train data. Note:lengthy output suppressed
+train_clean <- train %>%
+  mutate(TARGET = factor(TARGET),
+         NAME_CONTRACT_TYPE = factor(NAME_CONTRACT_TYPE),
+         CODE_GENDER = factor(CODE_GENDER),
+         FLAG_OWN_CAR = factor(FLAG_OWN_CAR),
+         FLAG_OWN_REALTY = factor(FLAG_OWN_REALTY),
+         NAME_TYPE_SUITE = factor(NAME_TYPE_SUITE),
+         NAME_INCOME_TYPE = factor(NAME_INCOME_TYPE),
+         NAME_EDUCATION_TYPE = factor(NAME_EDUCATION_TYPE),
+         NAME_FAMILY_STATUS = factor(NAME_FAMILY_STATUS),
+         NAME_HOUSING_TYPE = factor(NAME_HOUSING_TYPE),
+         FLAG_MOBIL = factor(FLAG_MOBIL), 
+         FLAG_EMP_PHONE = factor(FLAG_EMP_PHONE),
+         FLAG_WORK_PHONE = factor(FLAG_WORK_PHONE),
+         FLAG_CONT_MOBILE = factor(FLAG_CONT_MOBILE),
+         FLAG_PHONE = factor(FLAG_PHONE),
+         FLAG_EMAIL = factor(FLAG_EMAIL),
+         OCCUPATION_TYPE = factor(OCCUPATION_TYPE),
+         REGION_RATING_CLIENT = factor(REGION_RATING_CLIENT, ordered = TRUE),
+         REGION_RATING_CLIENT_W_CITY = abs(REGION_RATING_CLIENT_W_CITY),
+         REGION_RATING_CLIENT_W_CITY = factor(REGION_RATING_CLIENT_W_CITY, ordered = TRUE),
+         WEEKDAY_APPR_PROCESS_START = factor(WEEKDAY_APPR_PROCESS_START),
+         REG_REGION_NOT_LIVE_REGION = factor(REG_REGION_NOT_LIVE_REGION),
+         REG_REGION_NOT_WORK_REGION = factor(REG_REGION_NOT_WORK_REGION),
+         LIVE_REGION_NOT_WORK_REGION = factor(LIVE_REGION_NOT_WORK_REGION),
+         REG_CITY_NOT_LIVE_CITY = factor(REG_CITY_NOT_LIVE_CITY),
+         REG_CITY_NOT_WORK_CITY = factor(REG_CITY_NOT_WORK_CITY),
+         LIVE_CITY_NOT_WORK_CITY = factor(LIVE_CITY_NOT_WORK_CITY),
+         ORGANIZATION_TYPE = factor(ORGANIZATION_TYPE),
+         FONDKAPREMONT_MODE = factor(FONDKAPREMONT_MODE),
+         HOUSETYPE_MODE = factor(HOUSETYPE_MODE),
+         WALLSMATERIAL_MODE = factor(WALLSMATERIAL_MODE),
+         EMERGENCYSTATE_MODE = factor(EMERGENCYSTATE_MODE),
+         FLAG_DOCUMENT_2 = factor(FLAG_DOCUMENT_2),
+         FLAG_DOCUMENT_3 = factor(FLAG_DOCUMENT_3),
+         FLAG_DOCUMENT_4 = factor(FLAG_DOCUMENT_4),
+         FLAG_DOCUMENT_5 = factor(FLAG_DOCUMENT_5),
+         FLAG_DOCUMENT_6 = factor(FLAG_DOCUMENT_6),
+         FLAG_DOCUMENT_7 = factor(FLAG_DOCUMENT_7),
+         FLAG_DOCUMENT_8 = factor(FLAG_DOCUMENT_8),
+         FLAG_DOCUMENT_9 = factor(FLAG_DOCUMENT_9),
+         FLAG_DOCUMENT_10 = factor(FLAG_DOCUMENT_10),
+         FLAG_DOCUMENT_11 = factor(FLAG_DOCUMENT_11),
+         FLAG_DOCUMENT_12 = factor(FLAG_DOCUMENT_12),
+         FLAG_DOCUMENT_13 = factor(FLAG_DOCUMENT_13),
+         FLAG_DOCUMENT_14 = factor(FLAG_DOCUMENT_14),
+         FLAG_DOCUMENT_15 = factor(FLAG_DOCUMENT_15),
+         FLAG_DOCUMENT_16 = factor(FLAG_DOCUMENT_16),
+         FLAG_DOCUMENT_17 = factor(FLAG_DOCUMENT_17),
+         FLAG_DOCUMENT_18 = factor(FLAG_DOCUMENT_18),
+         FLAG_DOCUMENT_19 = factor(FLAG_DOCUMENT_19),
+         FLAG_DOCUMENT_20 = factor(FLAG_DOCUMENT_20),
+         FLAG_DOCUMENT_21 = factor(FLAG_DOCUMENT_21),
+         AMT_INCOME_TOTAL = log(AMT_INCOME_TOTAL),
+         AMT_ANNUITY = replace_na(AMT_ANNUITY,0),
+         AMT_GOODS_PRICE = replace_na(AMT_GOODS_PRICE,0),
+         OWN_CAR_AGE = replace_na(OWN_CAR_AGE,0),
+         CNT_FAM_MEMBERS = replace_na(CNT_FAM_MEMBERS,0),
+         EXT_SOURCE_2 = replace_na(EXT_SOURCE_2, mean(EXT_SOURCE_2,na.rm=TRUE)),
+         EXT_SOURCE_3 = replace_na(EXT_SOURCE_3, mean(EXT_SOURCE_3,na.rm=TRUE)),
+         OBS_30_CNT_SOCIAL_CIRCLE = replace_na(OBS_30_CNT_SOCIAL_CIRCLE,0),
+         DEF_30_CNT_SOCIAL_CIRCLE = replace_na(DEF_30_CNT_SOCIAL_CIRCLE,0),
+         OBS_60_CNT_SOCIAL_CIRCLE = replace_na(OBS_60_CNT_SOCIAL_CIRCLE,0),
+         DEF_60_CNT_SOCIAL_CIRCLE = replace_na(DEF_60_CNT_SOCIAL_CIRCLE,0),
+         AMT_REQ_CREDIT_BUREAU_HOUR = replace_na(AMT_REQ_CREDIT_BUREAU_HOUR,0),
+         AMT_REQ_CREDIT_BUREAU_DAY = replace_na(AMT_REQ_CREDIT_BUREAU_DAY,0),
+         AMT_REQ_CREDIT_BUREAU_WEEK = replace_na(AMT_REQ_CREDIT_BUREAU_WEEK,0),
+         AMT_REQ_CREDIT_BUREAU_MON = replace_na(AMT_REQ_CREDIT_BUREAU_MON,0),
+         AMT_REQ_CREDIT_BUREAU_QRT = replace_na(AMT_REQ_CREDIT_BUREAU_QRT,0),
+         AMT_REQ_CREDIT_BUREAU_QRT = ifelse(AMT_REQ_CREDIT_BUREAU_QRT >60, 60, AMT_REQ_CREDIT_BUREAU_QRT),
+         AMT_REQ_CREDIT_BUREAU_YEAR = replace_na(AMT_REQ_CREDIT_BUREAU_YEAR,0)
+         ) %>%
+  filter(!is.na(DAYS_LAST_PHONE_CHANGE))
+```
+
+Remove the columns determined to have high percentage of NAs or other exclusion factors (determined by EDA).
+
+```{r}
+# select to remove columns determined as too high NAs
+train_clean_select <- train_clean %>%
+  select(-DAYS_EMPLOYED,
+         -EXT_SOURCE_1,
+         -APARTMENTS_AVG,
+         -BASEMENTAREA_AVG,
+         -YEARS_BEGINEXPLUATATION_AVG,
+         -YEARS_BUILD_AVG,
+         -COMMONAREA_AVG,
+         -ELEVATORS_AVG,
+         -ENTRANCES_AVG,
+         -FLOORSMAX_AVG,
+         -FLOORSMIN_AVG,
+         -LANDAREA_AVG,
+         -LIVINGAPARTMENTS_AVG,
+         -LIVINGAREA_AVG,
+         -NONLIVINGAPARTMENTS_AVG,
+         -NONLIVINGAREA_AVG,
+         -APARTMENTS_MODE,
+         -BASEMENTAREA_MODE,
+         -YEARS_BEGINEXPLUATATION_MODE,
+         -YEARS_BUILD_MODE,
+         -COMMONAREA_MODE,
+         -ELEVATORS_MODE,
+         -ENTRANCES_MODE,
+         -FLOORSMAX_MODE,
+         -FLOORSMIN_MODE,
+         -LANDAREA_MODE,
+         -LIVINGAPARTMENTS_MODE,
+         -LIVINGAREA_MODE,
+         -NONLIVINGAPARTMENTS_MODE,
+         -NONLIVINGAREA_MODE,
+         -APARTMENTS_MEDI,
+         -BASEMENTAREA_MEDI,
+         -YEARS_BEGINEXPLUATATION_MEDI,
+         -YEARS_BUILD_MEDI,
+         -COMMONAREA_MEDI,
+         -ELEVATORS_MEDI,
+         -ENTRANCES_MEDI,
+         -FLOORSMAX_MEDI,
+         -FLOORSMIN_MEDI,
+         -LANDAREA_MEDI,
+         -LIVINGAPARTMENTS_MEDI,
+         -LIVINGAREA_MEDI,
+         -NONLIVINGAPARTMENTS_MEDI,
+         -NONLIVINGAREA_MEDI,
+         -TOTALAREA_MODE,
+         -FLAG_MOBIL
+         )
+```
+
+<br>
+<br>
+
+## Get Data from Bureau and Bureau_balance
+
+Summarize bureau and bureau balance data sets into one row that corresponds to the current application, and merge with the application data set.
+
+```{r}
+# for bureau_balance, create summary statistics for how much each credit line was overdue
+bur_bal_summary <- bureau_balance %>%
+  mutate(status_num = ifelse(STATUS=="X","0",     # make X into 0
+                             ifelse(STATUS=="C","0",STATUS)),     # make C into 0
+         status_num = as.numeric(status_num)) %>%      #convert chr column into numeric
+  group_by(SK_ID_BUREAU) %>%                    #create one row per credit line
+  summarise(count_dpd = sum(status_num > 0),     #number of months with overdue payment
+            mean_dpd = mean(status_num),       #average months with overdue payment
+            max_dpd = max(status_num))         #maximum category of overdue length
+
+# from bureau, make a filtered set of possible useful values
+bureau_filter <- bureau %>%
+  select(SK_ID_CURR, SK_ID_BUREAU, AMT_CREDIT_MAX_OVERDUE, AMT_CREDIT_SUM,
+         AMT_CREDIT_SUM_DEBT, AMT_CREDIT_SUM_LIMIT)
+
+# join the filtered bureau set with the bureau_balance data
+bureau_combo <- merge(x = bureau_filter, y = bur_bal_summary, by ="SK_ID_BUREAU", all.x = TRUE)
+
+# make final bureau data set with one row per SK_ID_CURR
+bureau_data <- bureau_combo %>%
+  mutate(AMT_CREDIT_MAX_OVERDUE = ifelse(is.na(AMT_CREDIT_MAX_OVERDUE),0,AMT_CREDIT_MAX_OVERDUE),
+         AMT_CREDIT_SUM = ifelse(is.na(AMT_CREDIT_SUM),0,AMT_CREDIT_SUM),
+         AMT_CREDIT_SUM_DEBT = ifelse(is.na(AMT_CREDIT_SUM_DEBT),0,AMT_CREDIT_SUM_DEBT),
+         AMT_CREDIT_SUM_LIMIT = ifelse(is.na(AMT_CREDIT_SUM_LIMIT),0,AMT_CREDIT_SUM_LIMIT),
+         count_dpd = ifelse(is.na(count_dpd),0,count_dpd),
+         mean_dpd = ifelse(is.na(mean_dpd),0,mean_dpd),
+         max_dpd = ifelse(is.na(max_dpd),0,max_dpd)
+  ) %>%   #mutate for all rows to turn NAs into 0
+  group_by(SK_ID_CURR) %>%
+  summarise(max_overdue = max(AMT_CREDIT_MAX_OVERDUE),   # max overdue on current/prev credit line
+            total_credit = sum(AMT_CREDIT_SUM),     # total current bureau credit
+            total_debt = sum(AMT_CREDIT_SUM_DEBT),    # total current debt on the bureau credit
+            credit_limit = sum(AMT_CREDIT_SUM_LIMIT),    # total current credit limit
+            count_dpd = sum(count_dpd),     #number of months with overdue payment
+            mean_dpd = mean(mean_dpd),    #average months with overdue payment
+            max_dpd = max(max_dpd)     #maximum category of overdue length
+            )
+
+# Combine bureau to train_clean
+train_w_bureau <- merge(x = train_clean_select, y = bureau_data, by ="SK_ID_CURR", all.x = TRUE) %>%
+    mutate(max_overdue = ifelse(is.na(max_overdue),0,max_overdue),
+           total_credit = ifelse(is.na(total_credit),0,total_credit),
+           total_debt = ifelse(is.na(total_debt),0,total_debt),
+           credit_limit = ifelse(is.na(credit_limit),0,credit_limit),
+           count_dpd = ifelse(is.na(count_dpd),0,count_dpd),
+           mean_dpd = ifelse(is.na(mean_dpd),0,mean_dpd),
+           max_dpd = ifelse(is.na(max_dpd),0,max_dpd),
+           max_dpd = factor(max_dpd, ordered=TRUE)
+    )
+```
+
+<br>
+<br>
+
+## Additional Feature Engineering
+
+Add some features that have been identified as potentially useful through further EDA.
+
+```{r}
+# create final train set with additional feature engineering fields
+train_final <- train_w_bureau %>%
+  mutate(amt_downpayment = AMT_GOODS_PRICE - AMT_CREDIT,
+         credit_annuity_ratio = ifelse(is.infinite(AMT_CREDIT/AMT_ANNUITY)
+                                       | is.na(AMT_CREDIT/AMT_ANNUITY),
+                                       0,
+                                       AMT_CREDIT/AMT_ANNUITY),
+
+         debt_credit_ratio = ifelse(is.infinite(total_debt/total_credit)
+                                    | is.na(total_debt/total_credit),
+                                    0,
+                                    total_debt/total_credit)
+         )
+```
+
+<br>
+<br>
+
+## Clean and Featurize Test Data
+
+Do all the same steps of cleaning and feature engineering for the test data set.
+
+```{r}
+#make new clean test
+test_clean <- test %>%
+  mutate(NAME_CONTRACT_TYPE = factor(NAME_CONTRACT_TYPE),
+         CODE_GENDER = factor(CODE_GENDER),
+         FLAG_OWN_CAR = factor(FLAG_OWN_CAR),
+         FLAG_OWN_REALTY = factor(FLAG_OWN_REALTY),
+         NAME_TYPE_SUITE = factor(NAME_TYPE_SUITE),
+         NAME_INCOME_TYPE = factor(NAME_INCOME_TYPE),
+         NAME_EDUCATION_TYPE = factor(NAME_EDUCATION_TYPE),
+         NAME_FAMILY_STATUS = factor(NAME_FAMILY_STATUS),
+         NAME_HOUSING_TYPE = factor(NAME_HOUSING_TYPE),
+         FLAG_MOBIL = factor(FLAG_MOBIL), 
+         FLAG_EMP_PHONE = factor(FLAG_EMP_PHONE),
+         FLAG_WORK_PHONE = factor(FLAG_WORK_PHONE),
+         FLAG_CONT_MOBILE = factor(FLAG_CONT_MOBILE),
+         FLAG_PHONE = factor(FLAG_PHONE),
+         FLAG_EMAIL = factor(FLAG_EMAIL),
+         OCCUPATION_TYPE = factor(OCCUPATION_TYPE),
+         REGION_RATING_CLIENT = factor(REGION_RATING_CLIENT, ordered = TRUE),
+         REGION_RATING_CLIENT_W_CITY = abs(REGION_RATING_CLIENT_W_CITY),
+         REGION_RATING_CLIENT_W_CITY = factor(REGION_RATING_CLIENT_W_CITY, ordered = TRUE),
+         WEEKDAY_APPR_PROCESS_START = factor(WEEKDAY_APPR_PROCESS_START),
+         REG_REGION_NOT_LIVE_REGION = factor(REG_REGION_NOT_LIVE_REGION),
+         REG_REGION_NOT_WORK_REGION = factor(REG_REGION_NOT_WORK_REGION),
+         LIVE_REGION_NOT_WORK_REGION = factor(LIVE_REGION_NOT_WORK_REGION),
+         REG_CITY_NOT_LIVE_CITY = factor(REG_CITY_NOT_LIVE_CITY),
+         REG_CITY_NOT_WORK_CITY = factor(REG_CITY_NOT_WORK_CITY),
+         LIVE_CITY_NOT_WORK_CITY = factor(LIVE_CITY_NOT_WORK_CITY),
+         ORGANIZATION_TYPE = factor(ORGANIZATION_TYPE),
+         FONDKAPREMONT_MODE = factor(FONDKAPREMONT_MODE),
+         HOUSETYPE_MODE = factor(HOUSETYPE_MODE),
+         WALLSMATERIAL_MODE = factor(WALLSMATERIAL_MODE),
+         EMERGENCYSTATE_MODE = factor(EMERGENCYSTATE_MODE),
+         FLAG_DOCUMENT_2 = factor(FLAG_DOCUMENT_2),
+         FLAG_DOCUMENT_3 = factor(FLAG_DOCUMENT_3),
+         FLAG_DOCUMENT_4 = factor(FLAG_DOCUMENT_4),
+         FLAG_DOCUMENT_5 = factor(FLAG_DOCUMENT_5),
+         FLAG_DOCUMENT_6 = factor(FLAG_DOCUMENT_6),
+         FLAG_DOCUMENT_7 = factor(FLAG_DOCUMENT_7),
+         FLAG_DOCUMENT_8 = factor(FLAG_DOCUMENT_8),
+         FLAG_DOCUMENT_9 = factor(FLAG_DOCUMENT_9),
+         FLAG_DOCUMENT_10 = factor(FLAG_DOCUMENT_10),
+         FLAG_DOCUMENT_11 = factor(FLAG_DOCUMENT_11),
+         FLAG_DOCUMENT_12 = factor(FLAG_DOCUMENT_12),
+         FLAG_DOCUMENT_13 = factor(FLAG_DOCUMENT_13),
+         FLAG_DOCUMENT_14 = factor(FLAG_DOCUMENT_14),
+         FLAG_DOCUMENT_15 = factor(FLAG_DOCUMENT_15),
+         FLAG_DOCUMENT_16 = factor(FLAG_DOCUMENT_16),
+         FLAG_DOCUMENT_17 = factor(FLAG_DOCUMENT_17),
+         FLAG_DOCUMENT_18 = factor(FLAG_DOCUMENT_18),
+         FLAG_DOCUMENT_19 = factor(FLAG_DOCUMENT_19),
+         FLAG_DOCUMENT_20 = factor(FLAG_DOCUMENT_20),
+         FLAG_DOCUMENT_21 = factor(FLAG_DOCUMENT_21),
+         AMT_INCOME_TOTAL = log(AMT_INCOME_TOTAL),
+         AMT_ANNUITY = replace_na(AMT_ANNUITY,0),
+         AMT_GOODS_PRICE = replace_na(AMT_GOODS_PRICE,0),
+         OWN_CAR_AGE = replace_na(OWN_CAR_AGE,0),
+         CNT_FAM_MEMBERS = replace_na(CNT_FAM_MEMBERS,0),
+         EXT_SOURCE_2 = replace_na(EXT_SOURCE_2, mean(EXT_SOURCE_2,na.rm=TRUE)),
+         EXT_SOURCE_3 = replace_na(EXT_SOURCE_3, mean(EXT_SOURCE_3,na.rm=TRUE)),
+         OBS_30_CNT_SOCIAL_CIRCLE = replace_na(OBS_30_CNT_SOCIAL_CIRCLE,0),
+         DEF_30_CNT_SOCIAL_CIRCLE = replace_na(DEF_30_CNT_SOCIAL_CIRCLE,0),
+         OBS_60_CNT_SOCIAL_CIRCLE = replace_na(OBS_60_CNT_SOCIAL_CIRCLE,0),
+         DEF_60_CNT_SOCIAL_CIRCLE = replace_na(DEF_60_CNT_SOCIAL_CIRCLE,0),
+         AMT_REQ_CREDIT_BUREAU_HOUR = replace_na(AMT_REQ_CREDIT_BUREAU_HOUR,0),
+         AMT_REQ_CREDIT_BUREAU_DAY = replace_na(AMT_REQ_CREDIT_BUREAU_DAY,0),
+         AMT_REQ_CREDIT_BUREAU_WEEK = replace_na(AMT_REQ_CREDIT_BUREAU_WEEK,0),
+         AMT_REQ_CREDIT_BUREAU_MON = replace_na(AMT_REQ_CREDIT_BUREAU_MON,0),
+         AMT_REQ_CREDIT_BUREAU_QRT = replace_na(AMT_REQ_CREDIT_BUREAU_QRT,0),
+         AMT_REQ_CREDIT_BUREAU_QRT = ifelse(AMT_REQ_CREDIT_BUREAU_QRT >60, 60, AMT_REQ_CREDIT_BUREAU_QRT),
+         AMT_REQ_CREDIT_BUREAU_YEAR = replace_na(AMT_REQ_CREDIT_BUREAU_YEAR,0)
+         ) %>%
+  filter(!is.na(DAYS_LAST_PHONE_CHANGE))
+
+# select to remove columns determined as too high NAs
+test_clean_select <- test_clean %>%
+  select(-DAYS_EMPLOYED,
+         -EXT_SOURCE_1,
+         -APARTMENTS_AVG,
+         -BASEMENTAREA_AVG,
+         -YEARS_BEGINEXPLUATATION_AVG,
+         -YEARS_BUILD_AVG,
+         -COMMONAREA_AVG,
+         -ELEVATORS_AVG,
+         -ENTRANCES_AVG,
+         -FLOORSMAX_AVG,
+         -FLOORSMIN_AVG,
+         -LANDAREA_AVG,
+         -LIVINGAPARTMENTS_AVG,
+         -LIVINGAREA_AVG,
+         -NONLIVINGAPARTMENTS_AVG,
+         -NONLIVINGAREA_AVG,
+         -APARTMENTS_MODE,
+         -BASEMENTAREA_MODE,
+         -YEARS_BEGINEXPLUATATION_MODE,
+         -YEARS_BUILD_MODE,
+         -COMMONAREA_MODE,
+         -ELEVATORS_MODE,
+         -ENTRANCES_MODE,
+         -FLOORSMAX_MODE,
+         -FLOORSMIN_MODE,
+         -LANDAREA_MODE,
+         -LIVINGAPARTMENTS_MODE,
+         -LIVINGAREA_MODE,
+         -NONLIVINGAPARTMENTS_MODE,
+         -NONLIVINGAREA_MODE,
+         -APARTMENTS_MEDI,
+         -BASEMENTAREA_MEDI,
+         -YEARS_BEGINEXPLUATATION_MEDI,
+         -YEARS_BUILD_MEDI,
+         -COMMONAREA_MEDI,
+         -ELEVATORS_MEDI,
+         -ENTRANCES_MEDI,
+         -FLOORSMAX_MEDI,
+         -FLOORSMIN_MEDI,
+         -LANDAREA_MEDI,
+         -LIVINGAPARTMENTS_MEDI,
+         -LIVINGAREA_MEDI,
+         -NONLIVINGAPARTMENTS_MEDI,
+         -NONLIVINGAREA_MEDI,
+         -TOTALAREA_MODE,
+         -FLAG_MOBIL
+         )
+
+# Combine bureau to test_clean_select
+test_w_bureau <- merge(x = test_clean_select, y = bureau_data, by ="SK_ID_CURR", all.x = TRUE) %>%
+    mutate(max_overdue = ifelse(is.na(max_overdue),0,max_overdue),
+           total_credit = ifelse(is.na(total_credit),0,total_credit),
+           total_debt = ifelse(is.na(total_debt),0,total_debt),
+           credit_limit = ifelse(is.na(credit_limit),0,credit_limit),
+           count_dpd = ifelse(is.na(count_dpd),0,count_dpd),
+           mean_dpd = ifelse(is.na(mean_dpd),0,mean_dpd),
+           max_dpd = ifelse(is.na(max_dpd),0,max_dpd),
+           max_dpd = factor(max_dpd, ordered=TRUE)
+    )
+
+# create final test set with additional feature engineering fields
+test_final <- test_w_bureau %>%
+  mutate(amt_downpayment = AMT_GOODS_PRICE - AMT_CREDIT,
+         credit_annuity_ratio = ifelse(is.infinite(AMT_CREDIT/AMT_ANNUITY)
+                                       | is.na(AMT_CREDIT/AMT_ANNUITY),
+                                       0,
+                                       AMT_CREDIT/AMT_ANNUITY),
+
+         debt_credit_ratio = ifelse(is.infinite(total_debt/total_credit)
+                                    | is.na(total_debt/total_credit),
+                                    0,
+                                    total_debt/total_credit)
+         )
+```
+
+<br>
+<br>
+
+## Downsample Imbalanced Majority Class
+
+Create a version of the train_final data set that is down-sampled (that is, the majority class is reduced to the same number of rows as the minority class by random sampling).
+
+```{r}
+#set seed for reproducibility
+set.seed(5687)
+
+#down-sample train set (with caret downSample function)
+down_train <- downSample(x = train_final,
+                         y = train_final$TARGET) %>% #downsample on the TARGET column
+  select(-Class) #remove new Class column added by downsample function
+
+#view split is now even
+table(down_train$TARGET)
+```
+
+<br>
+<br>
+
+## Split Train Data into Folds
+
+Train data is split into a train fold and a validation fold for cross-validation. First, split the train_final data set. Since the classes are imbalanced, we split the classes into folds separately so random assignment doesn't load most of the minority class into one set or the other.
+
+```{r}
+#set seed for reproducibility
+set.seed(1001)
+
+#split training data on the target variable and partition 70% of the rows
+rows <- createDataPartition(train_final$TARGET, p=0.7, list=FALSE)
+
+#subset train data with the 70% sample to create train_fold
+train_fold_full <- train_final[rows, ]
+
+#subset the remaining 30% of rows to create validation_fold
+validation_fold_full <- train_final[-rows, ]
+```
+
+Next, we split the down_train data (down-sampled version of the train data set) for testing if it improves models.
+
+```{r}
+#set seed for reproducibility
+set.seed(1010)
+
+#split training data on the target variable and partition 70% of the rows
+rows <- createDataPartition(down_train$TARGET, p=0.7, list=FALSE)
+
+#subset train data with the 70% sample to create train_fold
+train_fold_ds <- down_train[rows, ]
+
+#subset the remaining 30% of rows to create validation_fold
+validation_fold_ds <- down_train[-rows, ]
+```
+
+<br>
+<br>
+
+## Variable Selection & Feature Engineering
+
+Correlation matrix to determine if any variables correspond with `TARGET`. (Note: commented out and replaced with static image as it takes hours to run.)
+
+```{r fig.height=200, fig.width=200}
+#tic()
+#pairs.panels(train_final)
+#toc()
+```
+
+```{r, echo=FALSE, out.width='50%'}
+knitr::include_graphics("train_clean_select pairs.panels.png")
+```
+
+No values were close to 1 or -1; the highest correlation values for `TARGET` are -0.16 for `EXT_SOURCE_2` and -0.18 for `EXT_SOURCE_3`.
+
+Additionally, it looks like `FLAG_MOBIL` has near-zero variance so could be removed from modeling. The predictors `AMT_CREDIT` and `AMT_GOODS_PRICE` are colinear, with 0.99 correlation, as well as `REGION_RATING_CLIENT` and `REGION_RATING_CLIENT_W_CITY` with 0.95. For those, we may want to use only one in models.
+
+<br>
+<br>
+
+# Develop and Compare Models
+
+## Model Metrics
+
+The best model will be selected based on the metrics of accuracy and receiver operating characteristic (ROC) area under the curve (AUC).
+
+The accuracy benchmark is 92% due to the imbalanced target classes. A majority class classifier, or predicting every application will fall under the majority class, would be accurate 92% of the time. The majority class is `TARGET` = 0, which indicates the person did not have difficulties repaying their loan, so a majority class classifier would be assuming every loan applicant will pay back their loan.
+
+The ROC AUC measures the rate of true positives (client-loan combinations predicted to have payment difficulties that do have late payments) against false positives (client-loans predicted to have payment difficulties that repay on time).
+
+We will also look at sensitivity, or positive class accuracy and specificity, or the negative class accuracy. For the purposes of this, `TARGET` = 0 is the positive class, and `TARGET` = 1 is the negative class. Higher sensitivity indicates the model more accurately correctly classifies those likely to pay back their loan, while higher specificity indicates the model correctly identifies those applicants who may have trouble with repayments.
+
+<br>
+<br>
+
+## Model 1: Logistic Regression using all variables
+
+```{r, results='hide'}
+#logistic regression model
+lr_model_1 <-glm(TARGET ~ .,
+                 data = train_fold_full,
+                 family="binomial")
+
+summary(lr_model_1)
+```
+
+```{r}
+#make predictions
+lr_pred <- predict(lr_model_1, newdata = validation_fold_full, "response")
+
+lr_pred_f <- as.factor(ifelse(lr_pred > 0.5, 1, 0))
+
+#Accuracy Statistics
+
+conf_matrix <- confusionMatrix(lr_pred_f, validation_fold_full$TARGET)
+
+conf_matrix
+
+# AUC for lasso
+
+AUC_stat <- auc(roc(validation_fold_full$TARGET, as.numeric(lr_pred)))
+           
+AUC_stat
+
+#ROC-AUC plot
+plot_data <- roc(validation_fold_full$TARGET, as.numeric(lr_pred))
+                          
+ggroc(plot_data) +
+  ggplot2::ggtitle("Regression ROC Curve") +
+  geom_text(aes(x = .7, y = .1, label = paste("AUC =", round(AUC_stat, digits = 2))),
+            color = "black", size = 4, hjust = 1, vjust = 0)
+
+```
+
+The results for this logistic regression are as follows:
+*  ROC AUC = 0.7424
+*  Accuracy: 0.9195
+*  Sensitivity: 0.99894 (positive class accuracy, target=0)
+*  Specificity: 0.01517 (negative class accuracy, target=1)
+
+This model has a pretty good ROC AUC, however the accuracy is not better than the benchmark.
+
+<br>
+<br>
+
+## Model 2: Logistic Regression using specific variables
+
+```{r,results='hide'}
+lr_model_2 <-glm(TARGET ~ EXT_SOURCE_3 + EXT_SOURCE_2 + CODE_GENDER*DAYS_BIRTH + REGION_RATING_CLIENT_W_CITY + credit_limit + mean_dpd + amt_downpayment + credit_annuity_ratio + debt_credit_ratio,
+                 data = train_fold_full,
+                 family="binomial")
+
+summary(lr_model_2)
+```
+
+```{r}
+#make predictions
+lr_pred_2 <- predict(lr_model_2, newdata = validation_fold_full, "response")
+
+lr_pred_2f <- as.factor(ifelse(lr_pred_2 > 0.5, 1, 0))
+
+#Accuracy Statistics
+
+conf_matrix_2 <- confusionMatrix(lr_pred_2f, validation_fold_full$TARGET)
+
+conf_matrix_2
+
+# AUC for lasso
+
+AUC_stat_2 <- auc(roc(validation_fold_full$TARGET, as.numeric(lr_pred_2)))
+           
+AUC_stat_2
+
+#ROC-AUC plot
+plot_data_2 <- roc(validation_fold_full$TARGET, as.numeric(lr_pred_2))
+                          
+ggroc(plot_data_2) +
+  ggplot2::ggtitle("Regression ROC Curve") +
+  geom_text(aes(x = .7, y = .1, label = paste("AUC =", round(AUC_stat_2, digits = 2))),
+            color = "black", size = 4, hjust = 1, vjust = 0)
+
+```
+
+The results for the logistic regression are as follows:
+*  ROC AUC = 0.7246
+*  Accuracy: 0.9193
+*  Sensitivity: 0.999540 (positive class accuracy, target=0)
+*  Specificity: 0.005774 (negative class accuracy, target=1)
+
+This model is not as good ROC AUC as the previous model, and has lower specificity, meaning it is not as accurate in identifying clients who it would be risky to issue a loan. 
+
+<br>
+<br>
+
+## Model 3: Lasso Test
+
+The lasso model was chosen because it is a classifying model that should automatically tune and remove variables that don't contribute to the model.
+
+```{r, results='hide'}
+# Cross validated, regularized regression model
+lasso_1 <- cv.glmnet(as.matrix(train_fold_full[, -2]), train_fold_full$TARGET, 
+                         family = "binomial", alpha = 1, nfolds = 5)  # alpha = 1; nfolds does 5 folds/sets of data
+
+best_lambda_lasso_1 <- lasso_1$lambda.min
+
+# view output coefficients (note: lengthy output suppressed)
+coef(lasso_1, s=best_lambda_lasso_1, exact=F)
+```
+
+Variables marked with a `.` rather than coefficient number in the output were not used in the model. Next, we use the model to make predictions:
+
+```{r}
+# make predictions using lasso model
+pred_lasso_1 <- predict(lasso_1, as.matrix(validation_fold_full[, -2]), type = "response")
+
+# turn predictions into factor
+pred_lasso_1f <- as.factor(ifelse(pred_lasso_1 > 0.5,1,0))
+```
+
+Finally, we calculate accuracy statistics for the lasso model.
+
+```{r}
+# Create confusion matrix
+conf_matrix_lasso_1 <- confusionMatrix(pred_lasso_1f, validation_fold_full$TARGET)
+
+# view confusion matrix
+conf_matrix_lasso_1
+
+# Calculate AUC for lasso
+AUC_stat_lasso_1 <- auc(roc(validation_fold_full$TARGET, as.numeric(pred_lasso_1)))
+
+#view AUC
+AUC_stat_lasso_1
+
+# set up ROC-AUC plot data
+plot_data_lasso_1 <- roc(validation_fold_full$TARGET, as.numeric(pred_lasso_1))
+
+# create ROC-AUC plot            
+ggroc(plot_data_lasso_1) +
+  ggplot2::ggtitle("Regression ROC Curve") +
+  geom_text(aes(x = 0.7, y = .1, label = paste("AUC =", round(AUC_stat_lasso_1, digits = 2))),
+            color = "black", size = 4, hjust = 1, vjust = 0)
+```
+
+The results for the lasso regression are as follows:
+*  ROC AUC = 0.7215
+*  Accuracy: 0.9193
+*  Sensitivity: 0.9999410 (positive class accuracy, target=0)
+*  Specificity: 0.0006714 (negative class accuracy, target=1)
+
+This is about the benchmark accuracy and the ROC AUC is about as good as other models. Like earlier attempts, the model handles the majority class well, but does poorly on the minority class.
+
+<br>
+<br>
+
+## Model 4: Downsampled Lasso Test
+
+Then, we tried the lasso with the down-sampled data set.
+
+```{r, results='hide'}
+# Cross validated, regularized regression model
+lasso_2 <- cv.glmnet(as.matrix(train_fold_ds[, -2]), train_fold_ds$TARGET, 
+                         family = "binomial", alpha = 1, nfolds = 5)  # alpha = 1; nfolds does 5 folds/sets of data
+
+best_lambda_lasso_2 <- lasso_2$lambda.min
+
+# view output coefficients (note: lengthy output suppressed)
+coef(lasso_2, s=best_lambda_lasso_2, exact=F)
+
+# make predictions using lasso model
+pred_lasso_2 <- predict(lasso_2, as.matrix(validation_fold_ds[, -2]), type = "response")
+
+# turn predictions into factor
+pred_lasso_2f <- as.factor(ifelse(pred_lasso_2 > 0.5,1,0))
+
+# Create confusion matrix
+conf_matrix_lasso_2 <- confusionMatrix(pred_lasso_2f, validation_fold_ds$TARGET)
+
+# view confusion matrix
+conf_matrix_lasso_2
+
+# Calculate AUC for lasso
+AUC_stat_lasso_2 <- auc(roc(validation_fold_ds$TARGET, as.numeric(pred_lasso_2)))
+
+#view AUC
+AUC_stat_lasso_2
+
+# set up ROC-AUC plot data
+plot_data_lasso_2 <- roc(validation_fold_ds$TARGET, as.numeric(pred_lasso_2))
+
+# create ROC-AUC plot            
+ggroc(plot_data_lasso_2) +
+  ggplot2::ggtitle("Regression ROC Curve") +
+  geom_text(aes(x = 0.7, y = .1, label = paste("AUC =", round(AUC_stat_lasso_2, digits = 2))),
+            color = "black", size = 4, hjust = 1, vjust = 0)
+```
+
+The downsampled version had the following results:
+*  ROC AUC = 0.7333
+*  Accuracy = 0.6744
+*  Sensitivity = 0.6839 (positive class accuracy, target=0)
+*  Specificity = 0.6648 (negative class accuracy, target=1)
+
+The ROC AUC is improved, but the accuracy is well below the benchmark. Down-sampling significantly increased the specificity beyond any other model, meaning it correctly identified more people as having payment difficulties than the non-down-sampled version.
+
+<br>
+<br>
+
+# Model Performance
+
+The "best" model we created was the down-sampled lasso, with an accuracy of 67% and ROC AUC of 0.67. We selected this model even though it was not as accurate as the benchmark because of the higher ROC AUC, meaning it explained more variance in the data.
+
+<br>
+<br>
+
+## Predict Test Set Target Values
+
+Fit the model using the entire train set.
+
+```{r, results='hide'}
+# start timer
+tic()
+
+# fit logistic regression model with entire clean train data set
+lr_final <-glm(TARGET ~ .,
+                 data = train_final,
+                 family="binomial")
+
+# make predictions using the model
+pred_final <- predict(lr_final, newdata = test_final, "response")
+
+# stop timer
+toc()
+```
+
+The model took 80.16 seconds to run.
+
+```{r, results='hide'}
+lasso_final <- cv.glmnet(as.matrix(down_train[, -2]), down_train$TARGET, 
+                         family = "binomial", alpha = 1, nfolds = 5)  # alpha = 1; nfolds does 5 folds/sets of data
+
+best_lambda_lasso_final <- lasso_final$lambda.min
+
+# view output coefficients (note: lengthy output suppressed)
+coef(lasso_final, s=best_lambda_lasso_final, exact=F)
+
+# make predictions using lasso model
+pred_lasso_final <- predict(lasso_final, as.matrix(test_final), type = "response")
+
+# end timer
+toc()
+```
+
+<br>
+<br>
+
+## Kaggle Submission & Results
+
+Format the predictions into the required format.
+
+```{r}
+#format Kaggle submission table
+submission_table <-data.frame(test_final$SK_ID_CURR, pred_final) %>%
+  rename_at('test_final.SK_ID_CURR', ~'SK_ID_CURR') %>%
+  rename_at('pred_final',~'TARGET')
+
+#check format is correct
+head(submission_table)
+
+#check number of rows is correct
+nrow(submission_table)
+
+#write to CSV
+write.csv(submission_table, "kaggle_submission_5.csv", row.names = F)
+```
+
+After applying the cross-validated model to the test set and submitting predictions to Kaggle, I received the following:
+
+Kaggle Score: 0.73005
+
+<br>
+<br>
+
+# Results
+
+This final model had an in-sample ROC AUC of 0.74 and an out-of-sample ROC AUC of 0.73, which indicates the model may not be overfitting to the train fold. However, the accuracy is only equal to the benchmark majority class model of 92%.
+
+This model had very low specificity, or negative class accuracy with the set of clients which have trouble with repaying their loan. Therefore, this model would be a high-risk solution for Home Credit to implement, as it doesn't correctly screen out the riskier loan applications.
