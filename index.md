@@ -16,7 +16,7 @@ This project was challenging due to the large data set and imbalanced target var
 <br><br>
 - [Modeling Notebook (Rmd)](projects/Modeling_Notebook_Jessica_Kersey.Rmd)
 
-
+<br><br><br><br>
 
 #### House Prices: Advanced Regression Techniques
 
