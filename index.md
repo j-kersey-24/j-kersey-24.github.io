@@ -18,7 +18,6 @@ This project was challenging due to the large data set and imbalanced target var
 
 <br><br>
 ---
-<br>
 
 #### House Prices: Advanced Regression Techniques
 
