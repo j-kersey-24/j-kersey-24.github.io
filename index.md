@@ -26,7 +26,7 @@ My final model reached an estimated 0.76 out-of-sample R-squared value, with a K
 <br><br>
 This project was my first experience writing code collaboratively and was the largest data set I had worked with. Additionally, I learned how to effectively customize table and graph formatting in R.
 
-- [House Prices Notebook (Rmd)](projects/Kaggle Notebook - House Prices.Rmd)
+- [House Prices Notebook (Rmd)](projects/Kaggle_Notebook_House_Prices.Rmd)
 
 
 
