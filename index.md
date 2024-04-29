@@ -2,18 +2,13 @@
 
 ---
 
-### Category Name 1 
+### Kaggle Competitions 
 
-[Kaggle Competition: Home Credit Default Risk](/sample_page)
-<img src="images/dummy_thumbnail.jpg?raw=true"/>
-
----
-[Project 2 Title](/pdf/sample_presentation.pdf)
-<img src="images/dummy_thumbnail.jpg?raw=true"/>
-
----
-[Project 3 Title](http://example.com/)
-<img src="images/dummy_thumbnail.jpg?raw=true"/>
+####Home Credit Default Risk
+<br>
+[EDA Notebook (Rmd)](projects/EDA_Notebook_Jessica_Kersey.Rmd)
+<br>
+[Modeling Notebook (Rmd)](projects/Modeling_Notebook_Jessica_Kersey.Rmd)
 
 ---
 
