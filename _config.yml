@@ -1,13 +1,15 @@
-title: John Doe # your name (or website title) here
-logo: "/images/logo.png?raw=true" # your photo (or logo) here
+title: Jessica Kersey # your name (or website title) here
+logo: "" # your photo (or logo) here
 description: > # your text below (remove <br> elements if you don't need line breaks)
-  First description 
+  I am pursuing a MS in Business Analytics at Eccles School of Business, University of Utah. 
   <br><br>
-  Second description 
+  This portfolio includes notebooks for data analytic and machine learning projects I have completed. 
   <br><br>
-  <a href="https://www.linkedin.com/in/example/">View My LinkedIn Profile</a> 
+  <a href="https://www.linkedin.com/in/jessica-a-dejong/">LinkedIn</a>
+  <br><br>
+  <a href="https://github.com/j-kersey-24">Github</a>
   
 remote_theme: pages-themes/minimal@v0.2.0
 plugins:
 - jekyll-remote-theme
-google_analytics: UA-000000-0 # your Google Analytics tracking ID here
+google_analytics: # your Google Analytics tracking ID here
