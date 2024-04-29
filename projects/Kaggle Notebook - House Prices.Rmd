@@ -1,0 +1,469 @@
+---
+title: "Kaggle Notebook - Individual"
+author: "Jessica Kersey"
+date: "2023-11-13"
+output: 
+  html_document:
+   toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+# Introduction
+
+**IS 6489 Statistics & Predictive Analytics Assignment:** Individual Kaggle Notebook
+
+**Kaggle Competition:** House Prices: Advanced Regression Techniques
+
+**Competition Link:** www.kaggle.com/c/house-prices-advanced-regression-techniques
+
+**Assignment Summary:** Develop linear regression model of housing prices using only 5 predictors entered additively, with a goal of estimated 0.75 estimate out-of-sample R-squared value. Use the model to predict on new data, then submit predictions to Kaggle to get scored.
+
+**Assignment Steps:**
+
+1.  Prepare and clean train data
+
+2.  Perform exploratory data analysis on train data
+
+3.  Develop linear model of house prices using 5 predictors, calculate RMSE and R-squared on train fold
+
+4.  Cross-validate using validation fold, calculate estimated RMSE and R-squared on validation fold
+
+5.  Predict on Test Set and submit predictions to Kaggle
+
+# 1. Prepare Data
+
+Load library packages and data
+
+```{r}
+#load library packages
+library(tidyverse) #for advanced stats including dplyr and ggplot
+library(gt) #for table formatting
+library(rpart) #for classification tree model
+library(rpart.plot) #for plotting classification tree model
+
+#load train data
+train_data <- read.csv("train.csv")
+
+#load test data
+test_data <-read.csv("test.csv")
+```
+
+## Data Description
+
+Start exploring train data set.
+
+```{r, results='hide'}
+#view train data, lengthy output suppressed
+summary(train_data)
+```
+
+Target response variable is house Sale Price. Except Id, all other rows are house or sale characteristics which may or may not impact Sale Price.
+
+The data dictionary contains definitions for many of the missing values. An entry of "NA" is used in many fields to indicate a house does not have a certain feature--these will be turned into "None" so they will not be treated as missing for purposes of modeling.
+
+OverallQual and OverallCond are currently numeric, but are described in data dictionary as discrete values so they may be more appropriate as a factor. No minimum or maximum values stand out as unreasonable/impossible except for LotArea has a very large maximum. These will be explored more below.
+
+```{r}
+#find NAs
+count_missings <- function(x) sum(is.na(x))
+
+train_data %>% 
+  summarize_all(count_missings) # Handy summarize_all function
+```
+
+Most NAs are explained by the data dictionary or easily explained by mistaken data entry--for example, MasVnrType has a "None" option, however "NA" is used in many other fields to indicate lack of a feature, so someone entering the data could have entered "NA" instead of "None" here accidentally. However, there is no explanation for a NA in the Electrical column.
+
+## Explore Undefined NA
+
+```{r}
+#look at 1 Electrical NA
+filter(train_data,is.na(Electrical))
+```
+
+This Electrical NA looks like the only unusual/missing value in the row which is not explained by the data dictionary. The house has all utilities, which includes electrical, and it is a modern house, so this is most likely a single missing issue rather than an entirely corrupt row.
+
+```{r}
+#what is mode of Electrical?
+train_data %>%
+  group_by(Electrical) %>%
+  summarize(n = n()) %>%
+  gt()
+```
+
+The mode for Electrical is SBrkr, which is by far the most common type. I will replace this missing value with the mode.
+
+## Explore Numeric vs Factor
+
+Overall Quality: 1-10 rating, entered as numeric data type
+
+```{r}
+#OverallQual - plot and see if linear
+train_data %>% 
+  ggplot(aes(factor(OverallQual), SalePrice)) +
+  geom_boxplot() +
+  labs(title = "SalePrice ~ OverallQual") +
+  theme_minimal()
+```
+
+OverallQual is not linear; it should be converted to a factor.
+
+
+Overall Condition: 1-10 rating, entered as numeric data type
+
+```{r}
+#OverallCond - plot and see if linear 
+train_data %>% 
+  ggplot(aes(factor(OverallCond), SalePrice)) +
+  geom_boxplot() +
+  labs(title = "SalePrice ~ OverallCond") +
+  theme_minimal()
+```
+
+OverallCond is also not linear and should be converted to a factor.
+
+## Explore Possible Outliers
+
+Lot Area has large maximum value.
+
+```{r}
+#Lot Area - plot and check for outliers
+hist(train_data$LotArea)
+
+#default bins not helpful, scatterplot vs SalePrice instead
+plot(train_data$LotArea, train_data$SalePrice)
+```
+
+It looks like 150,000 sq feet and above might be outliers as they are far from the rest of the data, but approximately 4-acre house lots are not impossible values, so I will leave these alone.
+
+## Clean Data
+
+```{r}
+#clean data and assign to new object
+train_data %>%
+  mutate(MSSubClass = factor(MSSubClass), #MSSubClass - convert to factor
+         LotFrontage = replace_na(LotFrontage, median(LotFrontage, na.rm = T)), #LotFrontage - replace with median
+         Alley = replace_na(Alley, "None"), #Alley - NA = no alley
+         OverallQual = factor(OverallQual), #OverallQual - convert to factor
+         OverallCond = factor(OverallCond), #OverallCond - convert to factor
+         MasVnrType = replace_na(MasVnrType, "None"), #MasVnrType - assume NA = no masonry entered wrong
+         MasVnrArea = replace_na(MasVnrArea, 0), #MasVnrArea - assume NA = no masonry entered wrong, 0 sqft
+         BsmtQual = replace_na(BsmtQual, "None"), #BsmtQual - NA = no basement
+         BsmtCond = replace_na(BsmtCond, "None"), #BsmtCond - NA = no basement
+         BsmtExposure = replace_na(BsmtExposure, "None"), #BsmtExposure - NA = no basement
+         BsmtFinType1 = replace_na(BsmtFinType1, "None"), #BsmtFinType1 - NA = no basement
+         BsmtFinType2 = replace_na(BsmtFinType2, "None"), #BsmtFinType2 - NA = no basement
+         Electrical = replace_na(Electrical,"SBrkr"), #Electrical - replace with mode, "SBrkr"
+         FireplaceQu = replace_na(FireplaceQu, "None"), #FireplaceQu - NA = no fireplace
+         GarageType = replace_na(GarageType, "None"), #GarageType - NA = no garage
+         GarageYrBlt = replace_na(GarageYrBlt, 0), #GarageYrBlt - NA = no garage; year=integer so replace with 0
+         GarageFinish = replace_na(GarageFinish, "None"), #GarageFinish - NA = no garage
+         GarageQual = replace_na(GarageQual, "None"), #GarageQual - NA = no garage
+         GarageCond = replace_na(GarageCond, "None"), #GarageCond - NA = no garage
+         PoolQC = replace_na(PoolQC, "None"), #PoolQC - NA = no pool
+         Fence = replace_na(Fence, "None"), #Fence - NA = no fence
+         MiscFeature = replace_na(MiscFeature, "None") #MiscFeature - NA = none
+         ) %>%
+  select(-Id) -> c_train_data #remove Id column, not a predictor, lastly save to new object
+```
+
+```{r, results='hide'}
+#review train data cleaned correctly, lengthy output suppressed
+summary(c_train_data)
+```
+
+MSSubClass, OverallQual, and OverallCond are now correctly factored.
+
+```{r}
+#count missings
+c_train_data %>% 
+  summarize_all(count_missings)
+```
+
+No NAs remaining. Cleaning is successful!
+
+# 2. Perform Exploratory Data Analysis
+
+## Classification Tree Model
+
+Create classification tree to identify some strong predictors.
+
+```{r}
+#create classification tree model
+tree_model <- rpart(formula = SalePrice ~.,
+                    data = c_train_data)
+
+#plot classification tree model
+rpart.plot(tree_model)
+```
+
+Strongest predictors include OverallQual, Neighborhood, 1stFlrSF, GrLivArea, and BsmtFinSF1. Plotted OverallQual earlier, so check the other values with plots.
+
+```{r}
+#Use boxplot to check distributions of Neighborhood compared to Sale Price
+c_train_data %>%
+  ggplot(mapping = aes(x = Neighborhood, y = SalePrice)) +
+  geom_boxplot() +
+  labs(title = "SalePrice ~ Neighborhood") +
+  theme_minimal()
+```
+
+There is likely a difference in average between neighborhoods, with middle quartiles not overlapping across some neighborhoods.
+
+```{r}
+#Use scatterplot to compare 1st Floor Sq Ft to Sale Price
+c_train_data %>%
+  ggplot(mapping = aes(x = X1stFlrSF, y = SalePrice)) +
+  geom_point() +
+  labs(title = "SalePrice ~ 1stFlrSF") +
+  theme_minimal()
+```
+
+1st Floor Sq Ft is notably correlated with Sale Price.
+
+```{r}
+#Use scatterplot to compare above grade living area Sq Ft to Sale Price
+c_train_data %>%
+  ggplot(mapping = aes(x = GrLivArea, y = SalePrice)) +
+  geom_point() +
+  labs(title = "SalePrice ~ GrLivArea") +
+  theme_minimal()
+```
+
+Above Grade Living Area Sq Ft is also correlated with Sale Price.
+
+```{r}
+#Use scatterplot to compare Basement Finished Sq Ft to Sale Price
+c_train_data %>%
+  ggplot(mapping = aes(x = BsmtFinSF1, y = SalePrice)) +
+  geom_point() +
+  labs(title = "SalePrice ~ BsmtFinSF1") +
+  theme_minimal()
+```
+
+Basement Finished Sq Ft is notably correlated with Sale Price, but there are many 0 points (houses with no basements), which may make this a less valuable predictor.
+
+
+## Explore Other Predictors Via Plots
+
+Check some other predictors I think may have effects.
+
+```{r}
+#Use scatterplot to compare Lot Area to Sale Price
+c_train_data %>%
+  ggplot(mapping = aes(x = LotArea, y = SalePrice)) +
+  geom_point() +
+  labs(title = "SalePrice ~ LotArea") +
+  theme_minimal()
+```
+
+Lot area is not strongly correlated with Sale Price.
+
+```{r}
+#Use boxplot to compare Building Types compared to Sale Price
+c_train_data %>%
+  ggplot(mapping = aes(x = BldgType, y = SalePrice)) +
+  geom_boxplot() +
+  labs(title = "SalePrice ~ BldgType") +
+  theme_minimal()
+```
+
+There are no distinct averages/middle quartiles across Building Types.
+
+```{r}
+#Use scatterplot to compare Year Built to Sale Price
+c_train_data %>%
+  ggplot(mapping = aes(x = YearBuilt, y = SalePrice)) +
+  geom_point() +
+  labs(title = "SalePrice ~ YearBuilt") +
+  theme_minimal()
+```
+
+There is some correlation between Year Built and Sale Price, but not strong.
+
+```{r}
+#Use boxplot to compare HeatingQC compared to Sale Price
+c_train_data %>%
+  ggplot(mapping = aes(x = HeatingQC, y = SalePrice)) +
+  geom_boxplot() +
+  labs(title = "SalePrice ~ HeatingQC") +
+  theme_minimal()
+```
+
+If we set the factors in logical order, there may be a slight descending correlation, but it looks insignificant.
+
+# 3. Develop linear regression model of house prices
+
+## Split Train Data into Folds for Cross-Validation
+
+```{r}
+#set seed for reproducibility
+set.seed(471)
+
+#randomly sample 70% of the rows
+rows <- sample(x = 1:nrow(c_train_data), size = nrow(c_train_data)*.7, replace = F)
+
+#subset train data with the 70% sample to create train_fold
+train_fold <- c_train_data[rows, ]
+
+#subset the remaining rows (30%) to create validation_fold
+validation_fold <- c_train_data[-rows, ]
+```
+
+## Linear Model #1
+
+Testing 5 predictors: Overall Quality, Neighborhood, 1st Floor Sq Ft, Above Grade Living Area, and Basement Finished Square Feet.
+
+```{r}
+#Create linear model attempt #1
+(lm_1 <- lm(formula = SalePrice ~ OverallQual + Neighborhood + X1stFlrSF + GrLivArea + BsmtFinSF1,
+           data = train_fold))
+```
+
+## Linear Model #1 Performance
+
+Calculate RMSE and R-squared of linear model #1.
+
+```{r}
+#Create function to calculate RMSE
+RMSE <- function(observed, fitted){
+  (observed - fitted)^2 %>%
+    mean() %>%
+    sqrt()
+}
+
+#Calculate RMSE for lm_1
+RMSE(observed = train_fold$SalePrice,
+     fitted = fitted(lm_1)) %>%
+  round(digits = 2)
+
+#Create function to calculate R-squared
+R_squared <- function(observed, predicted){
+  RSS <- ((predicted - observed)^2) %>% sum()
+  TSS <- ((mean(observed) - observed)^2) %>% sum()
+  1 - RSS/TSS
+}
+
+#Calculate R_squared for lm_1
+R_squared(observed = train_fold$SalePrice,
+          predicted = predict(lm_1)) %>%
+  round(digits = 2)
+```
+
+Linear model #1 R-squared is above 0.75 benchmark. Cross-validate to estimate out-of-sample R-squared.
+
+# 4. Cross-Validate Using Test Set
+
+```{r}
+#Get predictions for validation_fold
+predictions <- predict(lm_1, newdata = validation_fold)
+
+#Calculate RMSE for lm_1 performance with validation_fold
+RMSE(observed = validation_fold$SalePrice,
+     fitted = predictions) %>%
+  round(digits = 2)
+
+#Calculate R_squared for lm_1 performance with validation_fold
+R_squared(observed = validation_fold$SalePrice,
+          predicted = predictions) %>%
+  round(digits = 2)
+```
+
+Linear model #1 has estimated out-of-sample R-squared above the 0.75 benchmark.
+
+# 5. Predict Test Set and Submit Predictions to Kaggle
+
+## Predict Test Set SalePrice Values
+
+1. Fit the model using the entire train set.
+
+```{r}
+#fit model with clean train data
+submission_model_1 <-lm(formula = SalePrice ~ OverallQual + Neighborhood + X1stFlrSF + GrLivArea + BsmtFinSF1,
+           data = c_train_data)
+```
+
+2. Make exactly the same changes to the test set that you made to the train set.
+
+```{r}
+#clean test data
+test_data %>%
+  mutate(MSSubClass = factor(MSSubClass), #MSSubClass - convert to factor
+         LotFrontage = replace_na(LotFrontage, median(LotFrontage, na.rm = T)), #LotFrontage - replace with median
+         Alley = replace_na(Alley, "None"), #Alley - NA = no alley
+         OverallQual = factor(OverallQual), #OverallQual - convert to factor
+         OverallCond = factor(OverallCond), #OverallCond - convert to factor
+         MasVnrType = replace_na(MasVnrType, "None"), #MasVnrType - assume NA = no masonry entered wrong
+         MasVnrArea = replace_na(MasVnrArea, 0), #MasVnrArea - assume NA = no masonry entered wrong, 0 sqft
+         BsmtQual = replace_na(BsmtQual, "None"), #BsmtQual - NA = no basement
+         BsmtCond = replace_na(BsmtCond, "None"), #BsmtCond - NA = no basement
+         BsmtExposure = replace_na(BsmtExposure, "None"), #BsmtExposure - NA = no basement
+         BsmtFinType1 = replace_na(BsmtFinType1, "None"), #BsmtFinType1 - NA = no basement
+         BsmtFinType2 = replace_na(BsmtFinType2, "None"), #BsmtFinType2 - NA = no basement
+         Electrical = replace_na(Electrical,"SBrkr"), #Electrical - replace with mode, "SBrkr"
+         FireplaceQu = replace_na(FireplaceQu, "None"), #FireplaceQu - NA = no fireplace
+         GarageType = replace_na(GarageType, "None"), #GarageType - NA = no garage
+         GarageYrBlt = replace_na(GarageYrBlt, 0), #GarageYrBlt - NA = no garage; year=integer so replace with 0
+         GarageFinish = replace_na(GarageFinish, "None"), #GarageFinish - NA = no garage
+         GarageQual = replace_na(GarageQual, "None"), #GarageQual - NA = no garage
+         GarageCond = replace_na(GarageCond, "None"), #GarageCond - NA = no garage
+         PoolQC = replace_na(PoolQC, "None"), #PoolQC - NA = no pool
+         Fence = replace_na(Fence, "None"), #Fence - NA = no fence
+         MiscFeature = replace_na(MiscFeature, "None") #MiscFeature - NA = none
+         ) %>%
+  select(-Id) -> c_test_data #remove Id column, not a predictor, lastly save to new object
+```
+
+```{r, results = 'hide'}
+#review train data cleaned correctly, lengthy output suppressed
+summary(c_test_data)
+```
+
+The data looks correct except there are a few NA values in some predictors (which had no NAs in the train set).
+
+3. Check there are no missing observations for your selected predictors in the test set.
+
+```{r}
+#count missings in test data
+c_test_data %>% 
+  select(OverallQual, Neighborhood, X1stFlrSF, GrLivArea, BsmtFinSF1) %>%
+  summarize_all(count_missings)
+
+#Re-clean data
+c_test_data %>%
+  mutate(BsmtFinSF1 = replace_na(BsmtFinSF1, 0)) -> c2_test_data #assume NA = no basement
+
+#check missings again
+c2_test_data %>% 
+  select(OverallQual, Neighborhood, X1stFlrSF, GrLivArea, BsmtFinSF1) %>%
+  summarize_all(count_missings)
+```
+
+4. Make predictions for the test set.
+
+```{r}
+#set new object with submission predictions
+submission_predictions <- predict(submission_model_1, newdata = c2_test_data)
+```
+
+5. Format your submission file.
+
+```{r}
+#format submission table with Id and SalePrice columns
+submission_final <- test_data %>%
+  select(Id) %>%
+  mutate(SalePrice = submission_predictions)
+
+#check format
+head(submission_final)
+
+#write to csv
+write.csv(submission_final, "kaggle_submission_jk.csv", row.names = F)
+```
+
+## Submit Predictions to Kaggle
+
+Kaggle Score: 0.16281
+Leaderboard Rank: 3227
