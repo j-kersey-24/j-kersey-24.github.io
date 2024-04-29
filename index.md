@@ -13,6 +13,7 @@ Home Credit wants to serve customers who are unbanked or lack credit history, so
 - [Modeling Notebook (Rmd)](projects/Modeling_Notebook_Jessica_Kersey.Rmd)
 
 
+
 #### House Prices: Advanced Regression Techniques
 
 Predict housing prices in Ames, Iowa with a supervised model. I developed a linear regression model of housing prices with the limitation of using only 5 predictors entered additively, with a goal of estimated 0.75 estimate out-of-sample R-squared value.
