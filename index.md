@@ -6,9 +6,9 @@
 
 #### Home Credit Default Risk
 <br>
-[EDA Notebook (Rmd)](/projects/EDA_Notebook_Jessica_Kersey.Rmd)
+[EDA Notebook (Rmd)](projects/EDA_Notebook_Jessica_Kersey.Rmd)
 <br><br>
-[Modeling Notebook (Rmd)](/projects/Modeling_Notebook_Jessica_Kersey.Rmd)
+[Modeling Notebook (Rmd)](projects/Modeling_Notebook_Jessica_Kersey.Rmd)
 
 ---
 
