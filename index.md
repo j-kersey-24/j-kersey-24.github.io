@@ -12,9 +12,9 @@ After cleaning the data and handling many NA values, and engineering domain-rela
 <br><br>
 This project was challenging due to the large data set and imbalanced target variable. I learned new modeling techniques such as lasso regression, downsampling, resampling, and the challenges of version control when individuals are using separate Rmd notebooks.
 
-- [EDA Notebook (Rmd)](projects/EDA_Notebook_Jessica_Kersey.Rmd)
+- [EDA Notebook (Rmd)](projects/HC_EDA_Notebook.Rmd)
 <br><br>
-- [Modeling Notebook (Rmd)](projects/Modeling_Notebook_Jessica_Kersey.Rmd)
+- [Modeling Notebook (Rmd)](projects/HC_Modeling_Notebook.Rmd)
 
 <br><br><br>
 
