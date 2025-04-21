@@ -1,0 +1,822 @@
+---
+title: "EDA Notebook for Swire Coca-Cola Delivery Standardization Project"
+author: "Jessica Kersey"
+date: "2025-02-22"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+# Introduction
+
+**Project Goal:** Identify characteristics of customers that order above a specific threshold annually to determine what might indicate "high growth potential" in customers below the threshold.
+
+**Business Problem Summary:** Swire Coca-Cola wants to optimize logistic transport costs by changing some direct delivery ("red truck") customers to a third-party delivery ("white truck"). They need to identify characteristics of customers which order greater than 400 gallons of product per year in order to determine which customers below this threshold might have "high growth potential". These "high growth potential" customers may exceed the 400 gallon threshold in the future if they continue with red truck delivery and business support services instead of being swapped to white truck.
+
+**Analytics Problem Summary:** Create a supervised classification model to predict the categories of customers based on historical sales data and customer characteristics. The categories of the target variable will be "above 400 gal threshold" and "below 400 gal threshold" of average gallons ordered per year, or alternatively, average gallons ordered per year can be used to create different threshold or category levels. The model must have interpretable results, especially feature importance.
+
+**Notebook Purpose:** This notebook will include exploratory data analysis (EDA) to prepare for modeling.
+
+**Questions:**
+
+-   Describe data:
+    -   What is the structure of the data?
+    -   What is the target variable?
+        -   Is the data unbalanced with respect to the target variable?
+        -   What would the accuracy be with a majority class classifier?
+    -   What kinds of predictor variables are there?
+    -   What features can we pull from categorical factor or text variables?
+    -   Is there a majority class in any factor feature?
+    -   Is there data missing from the provided datasets?
+        -   Will the missing data have impacts on our analysis or can it be ignored?
+-   Clean data:
+    -   Should any numeric or character fields be factored? (in case chosen model doesn't automatically factor)
+    -   What columns have NAs?
+    -   Can the NAs be explained?
+    -   Do any columns have a significant proportion of unexplained NAs so should be excluded?
+    -   Can NAs be reasonably imputed?
+    -   Are there any mistaken values?
+    -   Are there any outlier values that may skew a predictor?
+-   Explore data relationships:
+    -   What may be strong predictors of the target variable?
+    -   Are there relationships between any predictor variables (e.g. multicollinearity)?
+    -   What feature engineering can be done?
+    -   Does log transformation of predictors or target help them correlate better?
+
+<br>
+<br>
+
+# Get Data
+
+Load library packages
+
+```{r}
+#load library packages
+library(tidyverse) # for advanced stats including dplyr and ggplot
+library(skimr) # for advanced stats
+library(readxl) # for reading in xlsx file
+library(robustbase) # for outlier detection
+library(chemometrics) # for outlier detection
+library(car) # for VIF
+library(parallel) # for parallel processing
+library(rpart) #for classification tree model
+library(rpart.plot) #for plotting classification tree model
+library(gt) #for table formatting
+```
+
+Load data
+
+```{r}
+# load customer profile
+cust_profile <- read.csv("customer_profile.csv")
+
+# load customer address and ZIP code data
+cust_loc <- read.csv("customer_address_and_zip_mapping.csv") %>%
+  # break out address into simple attributes
+  separate(full.address,
+           into = c("ZIP", "City", "St.name", "St.abbr","County","Region","Latitude","Longitude"),
+           sep = ",") %>%
+  # remove redundant zip and one of the state columns
+  select(-c(zip, St.name))
+
+# load transactional data
+transactions <- read.csv("transactional_data.csv")
+
+# load delivery cost data
+delivery_cost <- read_excel("delivery_cost_data.xlsx")
+```
+
+<br>
+<br>
+
+# Describe Data
+
+## Review Each Data Set
+
+### Customer Profile
+
+First, review customer profile data.
+
+```{r, results = 'hide'}
+# Note:lengthy output suppressed
+
+# get summary of customer profile data
+skim(cust_profile)
+
+# check first few rows
+head(cust_profile)
+```
+
+Notable things about this data:
+
+-   `CUSTOMER_NUMBER` is the unique identifier for a customer. It is numeric but could be converted to factor.
+    -   There are over 30000 customers.
+-   `FIRST_DELIVERY_DATE` and `ON_BOARDING_DATE` are character fields and need to be converted to dates.
+-   `ZIP_CODE` is numeric and should be converted to factor.
+    -   Minimum value is 4 digits, which likely means there have been dropped leading zeroes which can be added back in.
+-   Many missing values (\~60%) in `PRIMARY_GROUP_NUMBER`. However, they are explained as independent stores which are not a part of a chain.
+    -   May consider creating a logical feature for chain vs not chain.
+-   All other character fields (`FREQUENT_ORDER_TYPE`, `COLD_DRINK_CHANNEL`, `TRADE_CHANNEL`, and `SUB_TRADE_CHANNEL`) should probably all be factored.
+    -   `TRADE_CHANNEL` and `SUB_TRADE_CHANNEL` get very specific, with 26 and 48 unique types, respectively.
+-   Swire Coca-Cola requested analysis on all customers as well as only the subset of `LOCAL_MARKET_PARTNER` customers, which are about 90% of customers in this dataset.
+-   Just from the first few rows of data, there's an interesting discrepancy where the `ON_BOARDING_DATE` for some customers is years before the `FIRST_DELIVERY_DATE`. May consider creating a feature looking at this distance.
+
+<br>
+<br>
+
+### Customer Locations
+
+Next, look at customer location.
+
+```{r, results = 'hide'}
+# Note:lengthy outputs suppressed
+skim(cust_loc)
+
+head(cust_loc)
+```
+
+Notable things about this data:
+
+-   Unlike in customer profile, `ZIP` is character. It can be factored, but does not have the problem of dropped zeroes.
+-   Customers are from 1355 cities, in 134 counties, in 5 states.
+-   Customers are in 104 regions, so regions likely encompass multiple counties.
+    -   In first rew rows, `Region` = 119, so they are not necessarily 1 to 104. If regions are numbered in a way where numbers close together may be more closely located, we may want to make leave this as numeric or make it an ordinal factor.
+-   No NAs to handle
+-   `ZIP` is the key field which will link this table with the customer profile.
+    -   This means all customers in the same ZIP code are treated as essentially the same location (latitude/longitude) for delivery distance purposes.
+    
+<br>
+
+Join the location data to customer profile.
+```{r, results='hide'}
+# Note: lengthy output suppressed
+
+# join the location to customer profile
+cust_profile_update <- cust_profile %>%
+  mutate(ZIP_CODE = sprintf("%05d", ZIP_CODE)) %>%
+  left_join(cust_loc,
+            by = c("ZIP_CODE" = "ZIP")
+            )
+
+# check output is correct
+head(cust_profile_update)
+```
+
+<br>
+<br>
+
+### Transactional Data
+
+Next, review transactional data.
+
+```{r, results = 'hide'}
+# view transactional data. Note: lengthy output suppressed
+skim(transactions)
+
+head(transactions)
+```
+
+Notable things about this data:
+
+-   `TRANSACTION_DATE` is character and needs converting to date.
+-   `ORDER_TYPE` should be factored.
+-   `CUSTOMER_NUMBER` is the key field which will link this table to customer profile.
+    -   If `CUSTOMER_NUMBER` is factored in customer profile data, it needs to be factored in this data set as well.
+-   Per Swire Coca-Cola representatives, cases are 1 gallon so total gallons = cases + gallons.
+    - Ordered total gallons will be used for target variable.
+    - Delivered total gallons can be used with the delivery cost data.
+    - At this time, I can't think of a use for the loading transactions.
+-   Years span only 2023-2024.
+-   Given the `Week` number, we could look at time series trends.
+-   Can explore if any `ORDER_TYPE` has any association with ordered amounts.
+-   Due to asynchrony of orders, loading, and delivery, I will follow Swire's recommendation to aggregate rather than try to identify which transactions might correspond to the different steps in the same order.
+
+<br>
+<br>
+
+### Delivery Cost Data
+
+Finally, look at delivery cost data.
+```{r, results = 'hide'}
+# view delivery cost data. Note:lengthy output suppressed
+skim(delivery_cost)
+
+head(delivery_cost,10)
+```
+
+Notable things about this data:
+
+-   `Cold Drink Channel`, `Applicable.To`, and `Cost.Type` should be factored.
+-   `Vol Range` should be factored ordinally.
+-   `Cold Drink Channel` should be the key field to match this with the `COLD_DRINK_CHANNEL` from customer profile, however there are 8 unique values in this data set and 9 in the profile data. This should be examined  to see if it will cause problems.
+-   `Applicable To` should be the field that can relate this delivery cost data with the transactional data, by matching the "Bottles and Cans" category to transactions which involved delivered cases and matching the "Fountain" category to transactions which delivered gallons of fountain drinks.
+-   It will be more complex to use this data set. We will need to link this to the transaction data by way of the customer profile (`Cold Drink Channel` to get `CUSTOMER_NUMBER`) and compare a given order's volume to the `Vol Range`.
+    -   However, as the focus of our analysis is customer performance and characteristics of growth potential, I suspect this dataset will be less useful in our approach.
+    
+<br>
+
+Look at `COLD_DRINK_CHANNEL` and why different factor levels in profile vs delivery data. 
+```{r}
+# get unique cold drink channels in customer profile vs delivery costs
+cdc_prof <- cust_profile$COLD_DRINK_CHANNEL %>%
+  unique() %>%
+  sort()
+
+cdc_del <- delivery_cost$`Cold Drink Channel` %>%
+  unique() %>%
+  sort()
+
+# list values in one list but not the other
+setdiff(cdc_prof,cdc_del)
+```
+
+<br>
+
+What customers have the extra level? 
+```{r, results = 'hide'}
+# Note: lengthy output suppressed
+
+# get subset of customers with cold drink channel not in delivery cost dataset
+cdc_missing <- cust_profile %>%
+  filter(COLD_DRINK_CHANNEL == "CONVENTIONAL")
+
+# check summary of rows with the cold drink channel not in delivery cost data
+skim(cdc_missing)
+
+# look at first few rows
+head(cdc_missing)
+```
+
+There are 57 customers in `COLD_DRINK_CHANNEL` of CONVENTIONAL. They are all in the same `TRADE_CHANNEL` and `SUB_TRADE_CHANNEL` (PHARMACY RETAILER and INDEPENDENT LOCAL STORE, respectively). Also, they're all Local Market Partners.
+
+<br>
+
+Do any customers in the missing channel have orders that will not get the cost calculated due to this missing factor?
+```{r, results = 'hide'}
+# Note: lengthy output suppressed
+
+# look for these customers in transaction data
+transactions %>%
+  filter(`CUSTOMER_NUMBER` %in% cdc_missing$CUSTOMER_NUMBER,   # where customers have the missing cold drink channel
+         ORDERED_CASES > 0 | ORDERED_GALLONS > 0) %>%          # where ordered cases or ordered gallons are > 0
+  skim()
+```
+
+Yes, there are 1232 rows where the customers in the `COLD_DRINK_CHANNEL` of CONVENTIONAL placed orders. If we use the delivery cost dataset to calculate costs, it will incorrectly give a cost of 0. We should ask the data owner for the missing delivery cost data.
+
+<br>
+
+Try to transform the delivery cost dataset and link with transactions, excluding customers with `COLD_DRINK_CHANNEL` = CONVENTIONAL.
+```{r, results='hide'}
+# Note: lengthy output suppressed
+
+# separate volume range into min and max columns
+delivery_cost_v <- delivery_cost %>%
+  separate(`Vol Range`,
+           into = c("min_vol", "max_vol"),
+           sep = " - ") %>%           # most are separated by a hyphen with spaces
+  mutate(min_vol = ifelse(min_vol == "1350+",   # no hyphen on last range so separate does not work
+                          1350,                 # remove plus sign
+                          as.numeric(min_vol)   # else use the min_vol and convert chr to num
+                          ),
+         max_vol = ifelse(is.na(max_vol),   # failed separate outputs NA, need to replace with a number
+                          100000,           # over 10 times larger than max order = impossibly big value
+                          as.numeric(max_vol)  # else use the min_vol and convert chr to num
+                          )
+         )
+
+# join modified delivery cost to transaction data
+transactions_cost <- transactions %>%
+  # add unique orderID column for re-grouping later
+  mutate(orderID = seq(1,nrow(transactions))) %>%
+  # join customer profile using customer number
+  left_join(cust_profile, by = "CUSTOMER_NUMBER") %>%
+  # join delivery data using cold drink channel from customer profile
+  left_join(delivery_cost_v, by = c("COLD_DRINK_CHANNEL" = "Cold Drink Channel")) %>%
+  mutate(
+    # add column for cost of cases based on delivery data applicability and quantity
+    cost_cases = ifelse(`Applicable To` == "Bottles and Cans"
+                        & ORDERED_CASES >= min_vol
+                        & ORDERED_CASES <= max_vol,
+                        `Median Delivery Cost` * ORDERED_CASES,
+                        0),        # else 0 if no cases or not in volume range
+    # add column for cost of gallons based on delivery data applicability and quantity
+    cost_gals = ifelse(`Applicable To` == "Fountain"
+                       & ORDERED_GALLONS >= min_vol
+                       & ORDERED_GALLONS <= max_vol,
+                       `Median Delivery Cost` * ORDERED_GALLONS,
+                       0),        # else 0 if no gallons or not in volume range
+    # add a column for total cost
+    total_cost = cost_cases + cost_gals) %>%
+  # remove all extra columns from joined tables except new cost features and orderID
+  select(c(1:12,28:30)) %>%
+  # group by all static values (duplicated across multiple rows due to join with delivery data)
+  group_by(across(c(1:12))) %>%
+  # summarise the cost values per order
+  summarise(cost_cases = sum(cost_cases, na.rm = TRUE),
+            cost_gals = sum(cost_gals, na.rm = TRUE),
+            total_cost = sum(total_cost, na.rm = TRUE)) %>%
+  ungroup() %>%
+  # remove unique orderID column for grouping
+  select(-orderID) %>%
+  # remove customers which the cost of 0 is incorrect (due to missing cost data)
+  filter(!`CUSTOMER_NUMBER` %in% cdc_missing)
+
+# preview modified dataset
+head(transactions_cost)
+```
+
+<br>
+<br>
+
+## Target Variable(s)
+
+The possible target variables need to be engineered. Possible target variables are: average gallons ordered per year and whether that's above or below the threshold of 400 gallons. I will take `ORDERED_CASES`+`ORDERED_GALLONS` from the transactional data, aggregate per customer per year, and from that output add a logical (T/F) column to the customer profile.
+```{r, results='hide'}
+# Note: lengthy output suppressed
+
+# create summary dataset of average ordered gallons
+cust_gallons <- transactions %>%
+  group_by(CUSTOMER_NUMBER) %>%    # aggregate by customer
+  summarise(total_gal_2023 = (sum(ORDERED_CASES[YEAR == 2023]) + sum(ORDERED_GALLONS[YEAR == 2023])),
+            total_gal_2024 = (sum(ORDERED_CASES[YEAR == 2024]) + sum(ORDERED_GALLONS[YEAR == 2024])),
+            avg_gal_per_year = (total_gal_2023 + total_gal_2024)             # calculate total gallons
+                                /2) %>%                                      # divide by 2 years
+  mutate(threshold_400_gal = ifelse(avg_gal_per_year >= 400,
+                                    TRUE,            # if equal or above 400 gal, meets threshold
+                                    FALSE)           # if below 400 gal, does not meet threshold
+         )
+
+# add the new data to the customer profile
+cust_profile_update2 <- merge(x = cust_profile_update,
+                             y = cust_gallons,
+                             by = "CUSTOMER_NUMBER",
+                             all.x = TRUE)
+
+# check the output is correct
+head(cust_profile_update2)
+```
+
+<br>
+
+NAs may have been introduced by including customers with no corresponding rows in the transactional dataset. See how many NAs and check the distribution of new numeric target `avg_gal_per_year` for potential outliers.
+```{r}
+# get quantile values and NA count
+summary(cust_profile_update2$avg_gal_per_year)
+```
+
+With over 30,000 customers, these 0.51% NAs can likely be removed without issue. Alternatively, the gallons calculations can be imputed to 0 and the `threshold_400_gal` can be imputed to FALSE.
+
+The inner quartile range is 56-407, but the maximum is 417,857. The maximum should be investigated as a possible outlier or mistaken value. However, we should be cautious as it might be an extremely high performing customer.
+
+<br>
+
+Check balance of target/accuracy of majority class prediction.
+```{r}
+# calculate accuracy of majority class prediction
+round(
+sum(cust_profile_update2$threshold_400_gal == FALSE,   # count number of FALSE values
+    na.rm = TRUE                                      # ignore NA rows when looking for FALSE
+    ) / nrow(cust_profile_update2),                    # divide by number of rows total 
+2)
+```
+
+A simple model using a majority class classifier would be accurate 74% of the time. This means the classes are mildly imbalanced, which may not need correcting during modeling. Model evaluation should use a metric other than accuracy or ROC-AUC due to their susceptibility to class imbalance; better choices would be F1 score or PR-AUC.
+
+<br>
+<br>
+
+# Clean Data
+
+According to the notes in the sections above, factor, handle NAs, add dropped leading zeroes, and correct dates.
+
+<br>
+
+## Clean Customer Profile
+
+Clean Customer Profile using the updated version with location data and target variable.
+```{r, results = 'hide'}
+# Note: lengthy output suppressed
+
+# clean customer profile
+cust_profile_c <- cust_profile_update2 %>%
+  mutate(CUSTOMER_NUMBER = factor(CUSTOMER_NUMBER),
+         PRIMARY_GROUP_NUMBER = ifelse(is.na(PRIMARY_GROUP_NUMBER),  # then convert NAs to...
+                                         "NA",                       # ...a character factor level
+                                         PRIMARY_GROUP_NUMBER),
+         PRIMARY_GROUP_NUMBER = factor(PRIMARY_GROUP_NUMBER),        # then factor
+         FREQUENT_ORDER_TYPE = factor(FREQUENT_ORDER_TYPE),
+         FIRST_DELIVERY_DATE = as.Date(FIRST_DELIVERY_DATE, "%m/%d/%Y"),  # no leading zero on m,d; 4-digit year
+         ON_BOARDING_DATE = as.Date(ON_BOARDING_DATE, "%m/%d/%Y"),        # no leading zero on m,d; 4-digit year
+         COLD_DRINK_CHANNEL = factor(COLD_DRINK_CHANNEL),
+         TRADE_CHANNEL = factor(TRADE_CHANNEL),
+         SUB_TRADE_CHANNEL = factor(SUB_TRADE_CHANNEL),
+         ZIP_CODE = factor(ZIP_CODE), 
+         City = factor(City),
+         St.abbr = factor(St.abbr),
+         County = factor(County),
+         # convert Region to numeric in case close numbers are in physical proximity
+         Region = as.numeric(Region),      
+         Latitude = as.numeric(Latitude),
+         Longitude = as.numeric(Longitude),
+         total_gal_2023 = ifelse(is.na(total_gal_2023),             # convert NAs to...
+                                 0,                                 # ...0 gallons ordered
+                                 total_gal_2023),
+         total_gal_2024 = ifelse(is.na(total_gal_2024),             # convert NAs to...
+                                 0,                                 # ...0 gallons ordered
+                                 total_gal_2024),        
+         avg_gal_per_year = ifelse(is.na(avg_gal_per_year),         # convert NAs to...
+                                   0,                               # ...0 gallons ordered
+                                   avg_gal_per_year),
+         threshold_400_gal = ifelse(is.na(threshold_400_gal),       # convert NAs to...
+                                    FALSE,                          # ...FALSE = below threshold
+                                    threshold_400_gal)
+  )
+         
+# check correct
+skim(cust_profile_c)
+```
+
+<br>
+<br>
+
+## Clean Transactions
+
+Clean Transactional and Transactional + Cost Data (using joined transactions_cost dataset). I am doing both of these separately as the Transactional + Cost is missing 57 customers in the `COLD_DRINK_CHANNEL` of CONVENTIONAL which did not have cost data. This will allow exploration of all customers vs the subset with cost data.
+```{r, results = 'hide'}
+# Note: lengthy output suppressed
+
+# clean transactions
+transactions_c <- transactions %>%
+  mutate(TRANSACTION_DATE = as.Date(TRANSACTION_DATE, "%m/%d/%Y"),
+         CUSTOMER_NUMBER = factor(CUSTOMER_NUMBER),
+         ORDER_TYPE = factor(ORDER_TYPE),
+  )
+
+# check correct
+skim(transactions_c)
+
+# clean transactions+cost
+transactions_cost_c <- transactions_cost %>%
+  mutate(TRANSACTION_DATE = as.Date(TRANSACTION_DATE, "%m/%d/%Y"),
+         CUSTOMER_NUMBER = factor(CUSTOMER_NUMBER),
+         ORDER_TYPE = factor(ORDER_TYPE),
+  )
+
+# check correct
+skim(transactions_cost_c)
+```
+
+<br>
+<br>
+
+## Outliers or Mistaken Data
+
+From initially describing the data, the only potential outlier I saw was in the engineered numeric values of total gallons for each year and the average across both years added to the customer profile.
+```{r}
+# plot avg_gal_per_year against a categorical variable to look for easily noticeable outliers
+cust_profile_c %>%
+  ggplot(aes(x=avg_gal_per_year, y=COLD_DRINK_CHANNEL)) +
+  geom_boxplot() +
+  labs(title = "Figure 1. Average Gallons/Year by Cold Drink Channel",
+       subtitle = "For possible outlier detection",
+       x = "Average Gallons Per Year Per Customer",
+       y = "Cold Drink Channel") +
+  theme_minimal()
+```
+
+<br>
+
+The category `BULK TRADE` would make sense to place larger orders, but I am curious what workplaces would have that high of orders. Filter dataset to look at all customers with greater than 100,000 average gallons per year.
+```{r, results='hide'}
+# Note: lengthy output suppressed
+
+# filter to 1e+05 on previous graph
+cust_profile_c %>%
+  filter(avg_gal_per_year>100000)
+```
+
+All the `COLD_DRINK_CHANNEL` = WORKPLACE high volume orders are in `TRADE_CHANNEL` = TRAVEL and `SUB_TRADE_CHANNEL` = CRUISE and have a `PRIMARY_GROUP_NUMBER` indicating they are part of a chain. Big-name chain cruises would make sense to have extremely high volume of orders!
+
+All the `COLD_DRINK_CHANNEL` = BULK TRADE high volume orders are in `TRADE_CHANNEL` = GENERAL and `SUB_TRADE_CHANNEL` = COMPREHENSIVE PROVIDER. This is not obvious to me what it means, so I will ask the data owner.
+
+<br>
+<br>
+
+# Explore Data
+
+## Additional Feature Engineering
+
+Additional features I suggested engineering in the customer profile dataset:
+
+-   Logical chain vs non-chain from `PRIMARY_GROUP_NUMBER`
+-   Count of days between on-boarding and first delivery
+
+```{r}
+# mutate to add new features to customer profile
+cust_profile_c <- cust_profile_c %>%
+  mutate(chain = ifelse(PRIMARY_GROUP_NUMBER == "NA",
+                        FALSE,                       # if no group number, not chain
+                        TRUE),                       # if group number, yes chain
+         ob_to_delivery = difftime(FIRST_DELIVERY_DATE,    # later date
+                                   ON_BOARDING_DATE,       # earlier date
+                                   units = "days")         # result in count of days
+         )
+```
+
+<br>
+<br>
+
+## Feature-Feature Relationships
+
+Create a simple logistic regression and then check for multicollinearity between features with Variance Inflation Factor
+```{r VIF}
+# specify parallel processing
+doParallel::registerDoParallel(cores = 20)
+
+# create logistic regression model
+VIF_model <- cust_profile_c %>%
+  # remove unnecessary columns
+  select(-c(CUSTOMER_NUMBER,       # identifier value, not useful predictor
+            PRIMARY_GROUP_NUMBER,  # too many factors and captured in chain logical
+            TRADE_CHANNEL, SUB_TRADE_CHANNEL,    # too many factors, cold drink channel might be enough
+            ZIP_CODE, City, County,           # many factors and location is captured in lat/long
+            total_gal_2023, total_gal_2024,   # aliased with avg_gal_per_year
+            ob_to_delivery                    # aliased with the component dates
+            )
+         ) %>%
+  # logistic regression using remaining features
+  glm(family = "binomial",
+      formula = threshold_400_gal ~ .)
+
+# run VIF
+vif_values <- vif(VIF_model)
+
+print(vif_values)
+
+# stop parallel processing
+doParallel::stopImplicitCluster()
+```
+
+There's a lot of multicollinearity, especially between engineered features and their components, such as difference in days between on-boarding and first delivery dates or the total gallons for each of the years and the average gallons across both years.
+
+Removing these aliased values, VIF values > 5 indicate multicollinearity in `Longitude`, `Region`, and `chain`. When modeling, consider a penalized regression method which would handle multicollinearity or manually trying different choices of related features (e.g. compare a model with only `Region` representing location vs one using only `St.abbr` vs one using only `Latitude` and `Longitude`).
+
+<br>
+<br>
+
+## Feature-Target Relationships
+
+The target variable is starting out as a threshold of 400 gallons ordered on average per year (binary). The alternate numeric target is average gallons ordered per year. I will explore relationships between various features and these potentital targets.
+
+<br>
+
+### Feature Importance Models
+
+Create a simple classification tree model to identify some strong predictors.
+```{r, results='hide'}
+# Note: lengthy output suppressed
+# try a model with all predictors
+tree_model1 <- cust_profile_c %>%
+  select(-c(CUSTOMER_NUMBER,   # remove identifier column
+            avg_gal_per_year, total_gal_2023, total_gal_2024)    # remove related values to target
+         ) %>%
+  rpart(formula = threshold_400_gal ~.,
+        method = "class")
+
+tree_model1
+```
+
+<br>
+
+Graph classification tree.
+```{r}
+# view tree model graph
+tree_model1 %>%
+  rpart.plot(main = "Figure 2. Classification Tree Model 1",
+             snip = TRUE)
+```
+
+<br>
+
+This model is not much better than majority class prediction. Try again with the `PRIMARY_GROUP_NUMBER` predictor removed.
+```{r, results='hide'}
+# Note: lengthy output suppressed
+
+# try a model with all predictors
+tree_model2 <- cust_profile_c %>%
+  select(-c(CUSTOMER_NUMBER,   # remove identifier column
+            avg_gal_per_year, total_gal_2023, total_gal_2024,    # remove related values to target
+            PRIMARY_GROUP_NUMBER)       # first highest predictor
+         ) %>%
+  rpart(formula = threshold_400_gal ~.,
+        method = "class")
+
+# view model
+tree_model2
+```
+
+The next best predictors as identified by this simple tree are `SUB_TRADE_CHANNEL` followed by `ZIP_CODE`. Beyond that `chain` and `ON_BOARDING_DATE` seem to be informative.
+
+<br>
+<br>
+
+### Explore Chains
+
+The classification model noted `PRIMARY_GROUP_NUMBER` as a predictor. I will look into how many chains we have and how many stores are in chains.
+```{r}
+# how many
+cust_profile_c %>%
+  group_by(chain) %>%
+  summarise(count = n()) %>%    # get count of rows for each class
+  ungroup() %>%                 # ungroup to be able to get total
+  mutate(proportion = round(count/sum(count),2)) %>%
+  # format table
+  gt() %>%
+  tab_header(title = "Table 1. Proportion of Customers in Chains vs Independent")
+```
+
+<br>
+
+60% of customers in this dataset are independent stores, while 40% are members of chains.
+
+<br>
+
+Of those in chains, are there any chains significantly larger than others?
+```{r}
+# look at all customers in chains
+cust_profile_c %>%
+  filter(chain == TRUE) %>%
+  # plot
+  ggplot(aes(x = PRIMARY_GROUP_NUMBER)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Figure 3. Preview of Chains with Store Quantities",
+       x = "Chain Identifier",
+       y = "Count of Stores in Chain")
+
+# look at customers in large chains (arbitrarily 100+ stores)
+cust_profile_c %>%
+  filter(chain == TRUE) %>%
+  group_by(PRIMARY_GROUP_NUMBER) %>%  
+  filter(n()>100) %>%      
+  ungroup() %>%
+  # plot
+  ggplot(aes(x = PRIMARY_GROUP_NUMBER)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Figure 4. Chains with Large Quantity of Stores",
+       x = "Chain Identifier",
+       y = "Count of Stores in Chain")
+```
+
+<br>
+
+What are the characteristics of these large chains?
+```{r}
+cust_profile_c %>%
+  filter(PRIMARY_GROUP_NUMBER %in% c(1008,117,138,156,170,194,24,420,47,505,54,58,606,63,71,754,8)) %>%
+  group_by(PRIMARY_GROUP_NUMBER, COLD_DRINK_CHANNEL) %>%
+  summarise(count = n(),
+            mean_avg_gal = mean(avg_gal_per_year))
+```
+
+These 17 chains are in the Cold Drink Channels Goods (11), Dining (3), Accomodations (2), and Events (1). Average across stores in the chain, only 2 Goods and 1 Dining chain has above the 400 gallon threshold. This is interesting as we might expect large chains to be a sign of high growth (in the past, and potential to grow more franchise locations in the future), but with the current average of 400 gallons ordered per year threshold, potentially many of these locations would not be considered profitable enough to continue on red truck delivery.
+
+<br>
+<br>
+
+### Possible Specific Relationships
+
+One possible relationship I noted earlier is `ORDER_TYPE` potentially correlating with the target. For example, a sales representative helping place an order might be able to upsell compared to online ordering.
+```{r}
+cust_profile_c %>%
+  group_by(FREQUENT_ORDER_TYPE, threshold_400_gal) %>%
+  summarise(count = n()) %>%          # get count of rows for each order type & threshold combo
+  ungroup() %>%                       # ungroup to be able to get total count
+  group_by(FREQUENT_ORDER_TYPE) %>%   # regroup by only order type
+  mutate(proportion = count/sum(count)) %>%       # calculate proportion
+  ungroup() %>%                       # ungroup again to plot
+  
+  # plot
+  ggplot(aes(x = FREQUENT_ORDER_TYPE, y = proportion, fill = threshold_400_gal)) +
+  geom_bar(position = "dodge",                   # grouped bar chart instead of stacked
+           stat = "identity") +
+  labs(title = "Figure 5. Proportion of Customers in Threshold Class",
+       subtitle = "For Given Frequent Order Types",
+       x = "Most Frequent Order Type Per Customer",
+       y = "Proportion of Customers",
+       fill = "Above 400 gallon threshold") +
+  theme_minimal()
+```
+
+<br>
+
+The majority class of the threshold is FALSE, so I'm not surprised all order types have higher FALSE values. Sales Representatives and other ordering types are perhaps more successful, but they are equal to or just barely over the minority class threshold for the entire dataset (~25%). Notably, of customers with the most frequent order type of MYCOKE360, a lower proportion are above the threshold compared to MYCOKE LEGACY. However, we might expect that these are newer customers that have onboarded more recently as MYCOKE360 launched late in the data gathering period (summer 2024 of the 2023-2024 calendar years dataset). More tenured and established customers will have placed many orders in 2023 and early 2024 via MYCOKE LEGACY.)
+
+It is interesting OTHER, defined as "less common methods of ordering" has nearly as high proportion of customers above the 400 gallon threshold as sales representatives. Perhaps Swire Coca-Cola may want to look at what methods are grouped together in this category and which might contribute to higher average orders.
+
+<br>
+
+I also want to look at frequent order type with the numeric average gallons per year potential target variable.
+```{r}
+cust_profile_c %>%
+  ggplot(aes(x=avg_gal_per_year, y=FREQUENT_ORDER_TYPE)) +
+  geom_boxplot() +
+  labs(title = "Figure 6. Average Gallons/Year by Order Type",
+       x = "Average Gallons Per Year Per Customer",
+       y = "Most Frequent Order Type for the Customer") +
+  theme_minimal()
+```
+
+<br>
+
+Not only the count of customers, but the handful of customers with outlier high average gallons per year most frequently ordered via Sales Representative or Other ordering methods (which we previously identified as cruises that are part of chains and `COLD_DRINK_CHANNEL` = BULK ORDER).
+
+<br>
+
+Because of the outliers, I am interested if log transformation of the average gallons per year might make any different trends appear.
+```{r}
+# same as previous boxplot, with log(avg_gal_per_year)
+cust_profile_c %>%
+  ggplot(aes(x=log(avg_gal_per_year), y=FREQUENT_ORDER_TYPE)) +
+  geom_boxplot() +
+  labs(title = "Figure 7. Log-transformed Average Gallons/Year by Order Type",
+       x = "Log-transformed Average Gallons Per Year Per Customer",
+       y = "Most Frequent Order Type for the Customer") +
+  theme_minimal()
+```
+
+<br>
+
+With the log transformation, Electronic Data Interchange (EDI) becomes almost as good as SALES REP and OTHER frequent order types. Notably, all the categories have a lot of overlapping between innerquartile ranges, so this feature is likely not as predictive as I expected.
+
+<br>
+<br>
+
+# Results
+
+**Describe Data:**
+
+-   Four datasets were provided, however location and delivery cost datasets were incorporated into customer profile and transactional datasets, respectively.
+-   Delivery cost data was missing one Cold Drink Channel, CONVENTIONAL. There were 57 customers in that channel with a total of 1232 transaction rows with some quantity ordered which would incorrectly be calculated as 0 cost.
+    -   To not lose data, I created two separate versions of the transactional dataset: one just cleaned and the other cleaned, joined with the delivery cost data, and with the CONVENTIONAL cold drink channel customers removed. 
+-   Upon looking at the data more closely, there are multiple possible target variables. In the Business Problem Statement, we suggested the target variable should be classes above or below the average of 400 gallons per year, the threshold specified by Swire Coca-Cola.
+    -   This target variable has a mild imbalance, with a majority class of 74% FALSE (below the threshold).
+        -   During modeling, we may consider correcting (e.g. upsampling minority class, downsampling majority class, etc.) the imbalance or choosing to use models less susceptible to imbalance.
+        -   We should also choose a model evaluation method which is less susceptible to class imbalance, such as F1 score or PR-AUC.
+    -   Another possible target variable we might consider is average gallons per year, a continuous numeric value. Or group average gallons into multi-class thresholds (e.g. 0-200, 200-400, 400-600) instead of the provided binary.
+-   Feature engineering was performed to create the total gallons per year per customer for 2023, 2024, and the average of the two across both years, as well as the target classes of above or below an average of 400 gallons.
+  
+<br>
+  
+**Clean Data:**
+
+-   Variables that were intended to be categories (even if represented by a number, such as `PRIMARY_GROUP_NUMBER` being used to group individual stores within the same chain) were factorized.
+-   Dates stored as character were converted to date.
+-   ZIP codes imported as numeric had lost leading zeroes, which were added in and the ZIP converted to string and factorized.
+-   No NAs were unexplainable. All NAs were imputed based on business logic.
+-   The only severe outliers that I found were in avg_gal_per_year, and they likely represent true customers rather than mistakes in the data. I chose not to remove those at this time, but they may be removed later.
+
+<br>
+
+**Explore Data**:
+
+-   Additional feature engineering was performed to create a logical binary to capture independent stores vs stores that are a part of a chain brand and to create a count of days between on-boarding date and the first delivery date of a customer.
+-   The resulting customer profile dataset had high multicollinearity between predictors.
+    -   Some multicollinearity was obvious and due to many predictors being related, e.g. all the columns  for location correlate with each other. This can be handled during modeling by only including one of a group of related predictors (e.g. use only `Region` or only `ZIP_CODE` to represent location in the model), or by using a modeling method such as penalized regression or bagging which is not affected by multicollinearity.
+-   With a simple classification tree model, some variables that seem correlated with the target are `PRIMARY_GROUP_NUMBER`, `SUB_TRADE_CHANNEL`,`ZIP_CODE` and beyond that, `chain` and `ON_BOARDING_DATE`.
+-   Looking at `PRIMARY_GROUP_NUMBER` and `chain`, 60% of customers are independent stores and 40% are in chains. Of those in chains, 17 chains had over 100 locations in this customer list, but only 3 of the 17 chains the average of all their stores' average gallons per year was greater than 400. 
+-   I decided not to explore the transactions with delivery cost because the focus of our analysis is on customer features. Anything notable from the transaction data was aggregated and added to the customer profile. 
+
+```{r}
+transactions_c %>%
+  mutate(month = format(TRANSACTION_DATE, "%m"),
+         order = ifelse(ORDERED_CASES >= 1 | ORDERED_GALLONS >= 1,
+                        TRUE,
+                        FALSE)
+         ) %>%
+  group_by(YEAR, month, ORDER_TYPE, order) %>%
+  summarize(count = n()) %>%
+  filter(ORDER_TYPE == "MYCOKE LEGACY" | ORDER_TYPE == "MYCOKE360") %>%
+  filter(order == TRUE) %>%
+  arrange(YEAR, month)
+
+transactions_c %>%
+    mutate(month = format(TRANSACTION_DATE, "%m"),
+         order = ifelse(ORDERED_CASES >= 1 | ORDERED_GALLONS >= 1,
+                        "yes",
+                        "no")
+         ) %>%
+  filter(ORDER_TYPE == "MYCOKE LEGACY" & YEAR == 2024 & order == "yes" & month %in% c(06,07,08,09,10,11,12))
+```
+
+```{r}
+cust_profile_c %>%
+  group_by(COLD_DRINK_CHANNEL, TRADE_CHANNEL, SUB_TRADE_CHANNEL) %>%
+  summarize(count = n()) %>%
+  filter(COLD_DRINK_CHANNEL == "DINING")
+```

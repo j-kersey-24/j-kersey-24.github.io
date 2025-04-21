@@ -1,0 +1,434 @@
+---
+title: "EDA Notebook for Swire Coca-Cola Delivery Standardization Project"
+author: "Jessica Kersey"
+date: "2025-02-22"
+output:
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+# Introduction
+
+**Project Goal:** Identify characteristics of customers that order above a specific threshold annually to determine what might indicate "high growth potential" in customers below the threshold.
+
+**Business Problem Summary:** Swire Coca-Cola wants to optimize logistic transport costs by changing some direct delivery ("red truck") customers to a third-party delivery ("white truck"). They need to identify characteristics of customers which order greater than 400 gallons of product per year in order to determine which customers below this threshold might have "high growth potential". These "high growth potential" customers may exceed the 400 gallon threshold in the future if they continue with red truck delivery and business support services instead of being swapped to white truck.
+
+**Analytics Problem Summary:** Using historical sales data and customer characteristics, identify characteristics of customers which have high growth across the given 2023-2024 data. 
+
+**Notebook Purpose:** This notebook includes unsupervised clustering models to investigate if there are natural groups of customers with similar characteristics, including growth rate.
+
+<br>
+<br>
+
+# Get Data
+
+Load library packages.
+```{r}
+#load library packages
+library(tidyverse) # for advanced stats including dplyr and ggplot
+library(skimr) # for advanced stats
+library(readxl) # for reading in xlsx file
+library(robustbase) # for outlier detection
+library(chemometrics) # for outlier detection
+library(car) # for VIF
+library(parallel) # for parallel processing
+library(foreach) # for parallel processing
+library(rpart) #for classification tree model
+library(rpart.plot) #for plotting classification tree model
+library(gt) #for table formatting
+library(caret) # for dummy variables
+library(cluster) # for partition clustering
+library(factoextra) # for cluster plots
+library(kernlab) # for kernel clustering
+library(tictoc) # for timing
+```
+
+Load data cleaned by a teammate.
+```{r}
+# load group's final datasets
+complete_data <- read.csv("complete_data.csv")
+
+complete_data_subset <- read.csv("complete_data_subset.csv")
+```
+
+<br>
+
+# Clustering Modeling
+
+## Preparing for Clustering
+
+### Recode & Scale Whole Dataset
+
+Recode categorical variables into dummy variables or remove them, then scale all columns.
+```{r}
+# Remove columns captured by engineered fields
+complete_trimmed <- complete_data %>%
+  select(-c(CUSTOMER_NUMBER,           # ID column
+            TRADE_CHANNEL.y,           # duplicate
+            null                       # unclear column
+         )) %>%
+  mutate(percent_change = ifelse(is.na(percent_change),        # convert NAs to...
+                                 0,                            # 0
+                                 percent_change),              # otherwise leave the same
+         percent_change = ifelse(is.infinite(percent_change),  # convert Infs to...
+                                 0,                            # 0
+                                 percent_change)               # otherwise leave the same
+         )
+
+# Extract identifier column
+CUSTOMER_NUMBER_col <- complete_data$CUSTOMER_NUMBER
+
+# Extract non-categorical cols
+complete_num <- complete_trimmed %>%
+  select(-c(growth_category, TRADE_CHANNEL.x, CO2_CUSTOMER, COLD_DRINK_CHANNEL,
+            SUB_TRADE_CHANNEL, LOCAL_MARKET_PARTNER, FREQUENT_ORDER_TYPE,
+            fountain_only))
+
+# Recode categorical into dummy variables
+complete_recoded <- complete_trimmed %>%
+  # create dummy variables model
+  dummyVars(data = ., formula = ~ growth_category + TRADE_CHANNEL.x
+            + CO2_CUSTOMER + COLD_DRINK_CHANNEL + SUB_TRADE_CHANNEL
+            + LOCAL_MARKET_PARTNER + FREQUENT_ORDER_TYPE + fountain_only
+            ) %>%
+  # apply dummy variables model
+  predict(object = .,
+          newdata = complete_trimmed)
+
+# combine and scale all columns
+complete_dummy_scaled <- cbind(complete_num, complete_recoded) %>%
+  scale(x = .,
+        scale = TRUE,
+        center = TRUE) %>%
+  as.data.frame()
+```
+
+<br>
+
+### Recode & Scale Subset Dataset
+
+Do the same for the subset of customers.
+```{r}
+# Remove columns captured by engineered fields
+subset_trimmed <- complete_data_subset %>%
+  select(-c(CUSTOMER_NUMBER,           # ID column
+            TRADE_CHANNEL.y,           # duplicate
+            cases_total, EDI           # no variation
+         )) %>%
+  mutate(percent_change = ifelse(is.na(percent_change),        # convert NAs to...
+                                 0,                            # 0
+                                 percent_change),              # otherwise leave the same
+         percent_change = ifelse(is.infinite(percent_change),  # convert Infs to...
+                                 0,                            # 0
+                                 percent_change)               # otherwise leave the same
+         )
+
+# Extract identifier column
+CUSTOMER_NUMBER_col_subset <- complete_data_subset$CUSTOMER_NUMBER
+
+# Extract non-categorical cols
+subset_num <- subset_trimmed %>%
+  select(-c(growth_category, TRADE_CHANNEL.x, COLD_DRINK_CHANNEL,
+            SUB_TRADE_CHANNEL, FREQUENT_ORDER_TYPE))
+
+# Recode categorical into dummy variables
+subset_recoded <- subset_trimmed %>%
+  # create dummy variables model
+  dummyVars(data = ., formula = ~ growth_category + TRADE_CHANNEL.x
+            + COLD_DRINK_CHANNEL + SUB_TRADE_CHANNEL + FREQUENT_ORDER_TYPE
+            ) %>%
+  # apply dummy variables model
+  predict(object = .,
+          newdata = subset_trimmed)
+
+# combine and scale all columns
+subset_dummy_scaled <- cbind(subset_num, subset_recoded) %>%
+  scale(x = .,
+        scale = TRUE,
+        center = TRUE) %>%
+  as.data.frame()
+```
+
+<br>
+
+## K-means Clustering
+
+For clustering, I found that some of the clustering functions took a very long time to run, especially on the entire dataset. Therefore, I set an arbitrary number of a maximum of 8 customer groups, since more than that increased processing time and may be harder to manage and interpret.
+
+Try kmeans partition clustering on full dataset with dummy variables, using Euclidean distance. 
+```{r}
+tic()
+
+# specify parallel processing
+doParallel::registerDoParallel(cores = 24)
+
+# define function to calculate silhouette widths 
+silhouette_widths_kmean_c <- function(k) {
+  # set seed within function so it applies to parallel sessions
+  set.seed(25463)
+  kmeans <- kmeans(complete_dummy_scaled, centers = k, nstart = 20, iter.max = 100) # kmeans with k centers
+  dist <- dist(complete_dummy_scaled, method = "euclidean")
+  sil <- silhouette(kmeans$cluster, dist) 
+  mean(sil[ ,3]) # calculate silhouette for each and take mean
+}
+
+# Calculate average silhouette width for different numbers of clusters
+avg_silwidth_kmean_c <- foreach(k = 2:8,     # 8 = Max reasonable # of customer groups
+                                .combine = c,  # c = combine results into vector
+                                .packages = 'cluster'  # ensure parallel sessions have cluster package
+                                ) %dopar% {   # foreach with %dopar% utilizes parallel processing
+  silhouette_widths_kmean_c(k)
+  }
+
+# Plot the Silhouette Method
+plot(2:8, avg_silwidth_kmean_c, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters k",
+     ylab = "Average Silhouette Width",
+     main = "Silhouette Scores for K-means Clustering - Complete Dataset")
+
+# stop parallel processing
+doParallel::stopImplicitCluster()
+
+toc()
+```
+
+The best value looks around 0.13, well below the ideal silhouette score of 0.5 or more. It is increasing, however, this model is likely not accurately describing variation in the dataset.
+
+<br>
+
+Try kmeans partition clustering on the subset with dummy variables, using Euclidean distance.
+```{r}
+tic()
+
+# specify parallel processing
+doParallel::registerDoParallel(cores = 24)
+
+# define function to calculate silhouette widths 
+silhouette_widths_kmean_s <- function(k) {
+  # set seed within function so it applies to parallel sessions
+  set.seed(25463)
+  kmeans <- kmeans(subset_dummy_scaled, centers = k, nstart = 20, iter.max = 100) # kmeans with k centers
+  dist <- dist(subset_dummy_scaled, method = "euclidean")
+  sil <- silhouette(kmeans$cluster, dist) 
+  mean(sil[ ,3]) # calculate silhouette for each and take mean
+}
+
+# Calculate average silhouette width for different numbers of clusters
+avg_silwidth_kmean_s <- foreach(k = 2:8,     # 8 = Max reasonable # of customer groups
+                                .combine = c,  # c = combine results into vector
+                                .packages = 'cluster'  # ensure parallel sessions have cluster package
+                                ) %dopar% {   # foreach with %dopar% utilizes parallel processing
+  silhouette_widths_kmean_s(k)
+  }
+
+# Plot the Silhouette Method
+plot(2:8, avg_silwidth_kmean_s, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters k",
+     ylab = "Average Silhouette Width",
+     main = "Silhouette Scores for K-means Clustering - Subset Dataset")
+
+# stop parallel processing
+doParallel::stopImplicitCluster()
+
+toc()
+```
+
+The best score is below 0.45 for 2 clusters, barely below the ideal threshold of 0.5.
+
+<br>
+
+## Kernel K-means Clustering
+
+Try kernel k-means partition clustering on full dataset with dummy variables, in case data is non-linearly separable.
+```{r}
+tic()
+
+# specify parallel processing
+doParallel::registerDoParallel(cores = 24)
+
+# define function to calculate silhouette widths 
+silhouette_widths_kkmean_c <- function(k) {
+  # set seed within function so it applies to parallel sessions
+  set.seed(25463)
+  # kkmeans with k clusters, using radial basis function
+  kkmeans <- kkmeans(as.matrix(complete_dummy_scaled), centers = k, kernel = "rbfdot",
+                     kpar = list(sigma = 0.1)) 
+  dist <- dist(complete_dummy_scaled, method = "euclidean")
+  sil <- silhouette(kkmeans@.Data, dist) 
+  mean(sil[ ,3]) # calculate silhouette for each and take mean
+}
+
+# Calculate average silhouette width for different numbers of clusters
+avg_silwidth_kkmean_c <- foreach(k = 2:8,     # 8 = Max reasonable # of customer groups
+                                .combine = c,  # c = combine results into vector
+                                .packages = c('cluster',  # ensure parallel sessions have cluster package
+                                              'kernlab') # same for kernlab
+                                ) %dopar% {   # foreach with %dopar% utilizes parallel processing
+  silhouette_widths_kkmean_c(k)
+  }
+
+# Plot the Silhouette Method
+plot(2:8, avg_silwidth_kkmean_c, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters k",
+     ylab = "Average Silhouette Width",
+     main = "Silhouette Scores for Kernel K-means Clustering - Complete Dataset")
+
+# stop parallel processing
+doParallel::stopImplicitCluster()
+
+toc()
+```
+
+Kernel k-means clustering using the Radial Basis kernel is worse, with -0.04 as the best silhouette width. This indicates extremely poor clustering, likely worse than random assignment!
+
+<br>
+
+Try kernel k-means partition clustering on subset dataset with dummy variables, in case data is non-linearly separable.
+```{r}
+tic()
+
+# specify parallel processing
+doParallel::registerDoParallel(cores = 24)
+
+# define function to calculate silhouette widths 
+silhouette_widths_kkmean_s <- function(k) {
+  # set seed within function so it applies to parallel sessions
+  set.seed(25463)
+  # kkmeans with k clusters, using radial basis function
+  kkmeans <- kkmeans(as.matrix(subset_dummy_scaled), centers = k, kernel = "rbfdot",
+                     kpar = list(sigma = 0.1)) 
+  dist <- dist(subset_dummy_scaled, method = "euclidean")
+  sil <- silhouette(kkmeans@.Data, dist) 
+  mean(sil[ ,3]) # calculate silhouette for each and take mean
+}
+
+# Calculate average silhouette width for different numbers of clusters
+avg_silwidth_kkmean_s <- foreach(k = 2:12,     # 12 = Max reasonable # of customer groups
+                                .combine = c,  # c = combine results into vector
+                                .packages = c('cluster',  # ensure parallel sessions have cluster package
+                                              'kernlab') # same for kernlab
+                                ) %dopar% {   # foreach with %dopar% utilizes parallel processing
+  silhouette_widths_kkmean_s(k)
+  }
+
+# Plot the Silhouette Method
+plot(2:12, avg_silwidth_kkmean_s, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters k",
+     ylab = "Average Silhouette Width",
+     main = "Silhouette Scores for Kernel K-means Clustering - Subset Dataset")
+
+# stop parallel processing
+doParallel::stopImplicitCluster()
+
+toc()
+```
+
+For the subset customers, a few more possible clusters were added to see if the clustering was reaching an "elbow" peak point. The best silhouette width was about 0.11 or so at about 10 clusters. It might go higher, but this appears to be a peak value.
+
+<br>
+
+## K-Medoid Clustering
+
+Try k-medoid partition clustering on full dataset with dummy variables, using Manhattan distance.
+```{r}
+tic()
+
+# specify parallel processing
+doParallel::registerDoParallel(cores = 24)
+
+# define function to calculate silhouette widths 
+silhouette_widths_kmed_c <- function(k) {
+  # set seed within function so it applies to parallel sessions
+  set.seed(25463)
+  kmedoid <- pam(complete_dummy_scaled, k) # k-medoid with k centers
+  kmedoid$silinfo$avg.width
+}
+
+# Calculate average silhouette width for different numbers of clusters
+avg_silwidth_kmed_c <- foreach(k = 2:8,     # 8 = Max reasonable # of customer groups
+                                .combine = c,  # c = combine results into vector
+                                .packages = 'cluster'  # ensure parallel sessions have cluster package
+                                ) %dopar% {   # foreach with %dopar% utilizes parallel processing
+  silhouette_widths_kmed_c(k)
+  }
+
+# Plot the Silhouette Method
+plot(2:8, avg_silwidth_kmed_c, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters k",
+     ylab = "Average Silhouette Width",
+     main = "Silhouette Scores for K-medoid Clustering - Complete Dataset")
+
+# stop parallel processing
+doParallel::stopImplicitCluster()
+
+toc()
+```
+This model is about 0.10 silhoutte score, again, not capturing variation well.
+
+<br>
+
+Try k-medoid partition clustering on subset dataset with dummy variables, using Manhattan distance.
+```{r}
+tic()
+
+# specify parallel processing
+doParallel::registerDoParallel(cores = 24)
+
+# define function to calculate silhouette widths 
+silhouette_widths_kmed_s <- function(k) {
+  # set seed within function so it applies to parallel sessions
+  set.seed(25463)
+  kmedoid <- pam(subset_dummy_scaled, k) # k-medoid with k centers
+  kmedoid$silinfo$avg.width
+}
+
+# Calculate average silhouette width for different numbers of clusters
+avg_silwidth_kmed_s <- foreach(k = 2:8,     # 8 = Max reasonable # of customer groups
+                                .combine = c,  # c = combine results into vector
+                                .packages = 'cluster'  # ensure parallel sessions have cluster package
+                                ) %dopar% {   # foreach with %dopar% utilizes parallel processing
+  silhouette_widths_kmed_s(k)
+  }
+
+# Plot the Silhouette Method
+plot(2:8, avg_silwidth_kmed_s, type = "b", pch = 19, frame = FALSE, 
+     xlab = "Number of clusters k",
+     ylab = "Average Silhouette Width",
+     main = "Silhouette Scores for K-medoid Clustering - Subset Dataset")
+
+# stop parallel processing
+doParallel::stopImplicitCluster()
+
+toc()
+```
+
+The elbow is at 0.18 silhouette score for 7 clusters, which is again not capturing variation in the dataset well.
+
+<br>
+
+# Results - Best Partition Cluster
+
+Visualize the best partition cluster identified above (K-means clustering on the subset customers).
+```{r}
+# max silhouette score
+cat(paste("Maximum Silhouette Score:\n"), max(avg_silwidth_kmean_s))
+
+# index for silhouette score (cluster qty starts at 2, index starts at 1)
+cat(paste("\nIndex:\n"),(which.max(avg_silwidth_kmean_s) + 1))
+
+# best partition cluster
+best_pc <- kmeans(subset_dummy_scaled, centers = 2, nstart = 20, iter.max = 100)
+
+# plot best partition cluster
+fviz_cluster(object = best_pc,
+             data = subset_dummy_scaled,
+             main = "Scatterplot of Best K-means Clustering",
+             labelsize = 6,
+             ggtheme = theme_minimal())
+```
+
+These two dimensions make discrete clusters, but the first two dimensions capture only 12.2% of the variation in the data which is very low.
